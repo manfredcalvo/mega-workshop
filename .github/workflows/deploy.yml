@@ -1,0 +1,175 @@
+name: Deploy BCP Products
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deployment target"
+        required: false
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+  DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+  TARGET: ${{ github.event.inputs.target || 'dev' }}
+
+jobs:
+  build-app:
+    name: Build & Lint App
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build client
+        run: npm run build:client
+
+      - name: Build server
+        run: npm run build:server
+
+  deploy-bundle:
+    name: Deploy Bundle
+    needs: build-app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+
+      - name: Validate bundle
+        run: databricks bundle validate -t ${{ env.TARGET }}
+
+      - name: Deploy bundle
+        run: databricks bundle deploy -t ${{ env.TARGET }}
+
+  scrape-and-create-ka:
+    name: Scrape Data & Create KA
+    needs: deploy-bundle
+    runs-on: ubuntu-latest
+    outputs:
+      endpoint_name: ${{ steps.extract.outputs.endpoint_name }}
+      experiment_id: ${{ steps.extract.outputs.experiment_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+
+      - name: Run scrapers and create KA
+        id: run_job
+        run: |
+          databricks bundle run create_and_deploy_model -t ${{ env.TARGET }} --output json > job_output.json
+          cat job_output.json
+
+      - name: Extract KA endpoint and experiment ID
+        id: extract
+        run: |
+          KA_OUTPUT=$(jq -r '.task_outputs["create_ka"].notebook_output.result' job_output.json)
+          ENDPOINT_NAME=$(echo "$KA_OUTPUT" | jq -r '.endpoint_name')
+          EXPERIMENT_ID=$(echo "$KA_OUTPUT" | jq -r '.experiment_id')
+          echo "endpoint_name=$ENDPOINT_NAME" >> "$GITHUB_OUTPUT"
+          echo "experiment_id=$EXPERIMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "KA Endpoint: $ENDPOINT_NAME"
+          echo "Experiment ID: $EXPERIMENT_ID"
+
+  setup-db-and-redeploy:
+    name: Setup DB Role & Redeploy with All Config
+    needs: [scrape-and-create-ka]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install "databricks-sdk>=0.81.0" "psycopg[binary]>=3.0"
+
+      - name: Get app service principal client ID
+        id: get_sp
+        run: |
+          SP_CLIENT_ID=$(databricks apps get bcp-products --output json | jq -r '.service_principal_client_id')
+          echo "sp_client_id=$SP_CLIENT_ID" >> "$GITHUB_OUTPUT"
+          echo "Service Principal: $SP_CLIENT_ID"
+
+      - name: Get Lakebase project ID and endpoint hostname
+        id: get_db
+        run: |
+          PROJECT_ID=$(databricks bundle summary -t ${{ env.TARGET }} --output json | jq -r '.resources.postgres_projects.chatbot_lakebase.project_id')
+          PGHOST=$(databricks postgres get-endpoint "projects/$PROJECT_ID/branches/production/endpoints/primary" --output json | jq -r '.status.hosts.host')
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "pghost=$PGHOST" >> "$GITHUB_OUTPUT"
+          echo "Project ID: $PROJECT_ID"
+          echo "PGHOST: $PGHOST"
+
+      - name: Update app.yaml with DB credentials
+        run: |
+          python3 - <<'EOF'
+          import re
+
+          pghost = "${{ steps.get_db.outputs.pghost }}"
+          pguser = "${{ steps.get_sp.outputs.sp_client_id }}"
+
+          with open("app.yaml") as f:
+              content = f.read()
+
+          content = re.sub(
+              r'(- name: PGHOST\s+value: ")[^"]*(")',
+              f'\\g<1>{pghost}\\g<2>',
+              content,
+          )
+          content = re.sub(
+              r'(- name: PGUSER\s+value: ")[^"]*(")',
+              f'\\g<1>{pguser}\\g<2>',
+              content,
+          )
+
+          with open("app.yaml", "w") as f:
+              f.write(content)
+
+          print(f"app.yaml updated — PGHOST={pghost}, PGUSER={pguser}")
+          EOF
+
+      - name: Run Lakebase role setup
+        run: |
+          python3 scripts/lakebase-role-setup.py \
+            --project-id ${{ steps.get_db.outputs.project_id }} \
+            --sp-client-id ${{ steps.get_sp.outputs.sp_client_id }}
+
+      - name: Redeploy bundle with KA config and DB credentials
+        run: |
+          databricks bundle deploy -t ${{ env.TARGET }} \
+            --var="serving_endpoint_name=${{ needs.scrape-and-create-ka.outputs.endpoint_name }}" \
+            --var="experiment_id=${{ needs.scrape-and-create-ka.outputs.experiment_id }}"
+
+  start-app:
+    name: Start App
+    needs: setup-db-and-redeploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+
+      - name: Start the app
+        run: databricks bundle run databricks_chatbot -t ${{ env.TARGET }}

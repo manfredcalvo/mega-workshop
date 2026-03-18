@@ -1,0 +1,112 @@
+bundle:
+  name: bcp-products
+
+variables:
+  serving_endpoint_name:
+    description: "Name of the model serving endpoint to be used by the app"
+    default: "ka-10ea02ac-endpoint"
+  resource_name_suffix:
+    description: "Suffix for resource names (app/lakebase instance names etc). Helpful for avoiding name collisions if multiple users deploy this app to the same workspace"
+  experiment_id:
+    description: "MLflow experiment ID for collecting user feedback"
+    default: "338429763563517"
+  uc_catalog:
+    description: "Unity Catalog catalog name for storing scraper output"
+    default: "users"
+  uc_schema:
+    description: "Unity Catalog schema name for storing scraper output"
+    default: "manffred_calvosanchez"
+  uc_volume:
+    description: "Unity Catalog volume name for storing scraper output"
+    default: "bcp"
+
+resources:
+  postgres_projects:
+    chatbot_lakebase:
+      project_id: 'bcp-ka-db-${var.resource_name_suffix}'
+      display_name: 'BCP KA DB'
+      pg_version: 17
+
+
+  jobs:
+    create_and_deploy_model:
+      name: create-and-deploy-model-${var.resource_name_suffix}
+      tasks:
+        - task_key: scrape_credit_cards
+          notebook_task:
+            notebook_path: ./notebooks/data_processing/scraper_credit_cards.py
+            source: WORKSPACE
+            base_parameters:
+              uc_catalog: ${var.uc_catalog}
+              uc_schema: ${var.uc_schema}
+              uc_volume: ${var.uc_volume}
+          environment_key: default
+        - task_key: scrape_loans
+          notebook_task:
+            notebook_path: ./notebooks/data_processing/scraper_loans.py
+            source: WORKSPACE
+            base_parameters:
+              uc_catalog: ${var.uc_catalog}
+              uc_schema: ${var.uc_schema}
+              uc_volume: ${var.uc_volume}
+          environment_key: default
+        - task_key: create_ka
+          depends_on:
+            - task_key: scrape_credit_cards
+            - task_key: scrape_loans
+          notebook_task:
+            notebook_path: ./notebooks/model/create_ka.py
+            source: WORKSPACE
+            base_parameters:
+              uc_catalog: ${var.uc_catalog}
+              uc_schema: ${var.uc_schema}
+              uc_volume: ${var.uc_volume}
+          environment_key: default
+        - task_key: model_evaluation
+          depends_on:
+            - task_key: create_ka
+          notebook_task:
+            notebook_path: ./notebooks/evaluations/model_evaluation.py
+            source: WORKSPACE
+            base_parameters:
+              endpoint_name: "{{tasks.create_ka.values.endpoint_name}}"
+              experiment_id: "{{tasks.create_ka.values.experiment_id}}"
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+
+  apps:
+    databricks_chatbot:
+      name: bcp-products
+      description: "BCP Products Chat Bot"
+      source_code_path: .
+      resources:
+        - name: serving-endpoint
+          description: "Databricks serving endpoint name for the AI agent"
+          serving_endpoint:
+            name: ${var.serving_endpoint_name}
+            permission: CAN_QUERY
+        - name: experiment
+          description: "MLflow experiment for collecting user feedback"
+          experiment:
+            experiment_id: ${var.experiment_id}
+            permission: CAN_EDIT
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      resource_name_suffix: dev-${workspace.current_user.domain_friendly_name}
+
+  staging:
+    mode: production
+    variables:
+      resource_name_suffix: "staging"
+
+  prod:
+    mode: production
+    variables:
+      resource_name_suffix: "prod"
