@@ -53,24 +53,13 @@ jobs:
 
       - uses: databricks/setup-cli@main
 
-      - name: Strip app resources for initial deploy
+      - name: Replace valueFrom entries in app.yaml for initial deploy
         run: |
           python3 - <<'EOF'
           import yaml
 
-          # Remove all app resource bindings so the initial deploy does not
-          # fail trying to resolve a KA endpoint or MLflow experiment that
-          # does not exist yet in the workspace.
-          with open("databricks.yml") as f:
-              config = yaml.safe_load(f)
-
-          config["resources"]["apps"]["databricks_chatbot"]["resources"] = []
-
-          with open("databricks.yml", "w") as f:
-              yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-
-          # Replace all valueFrom references in app.yaml with empty values
-          # so the runtime does not try to resolve unbound resources.
+          # Replace all valueFrom references with empty values so the initial
+          # deploy does not fail trying to resolve resources that don't exist yet.
           with open("app.yaml") as f:
               app = yaml.safe_load(f)
 
@@ -82,7 +71,7 @@ jobs:
           with open("app.yaml", "w") as f:
               yaml.dump(app, f, default_flow_style=False, allow_unicode=True)
 
-          print("Stripped app resources and valueFrom entries for initial deploy")
+          print("Replaced valueFrom entries for initial deploy")
           EOF
 
       - name: Validate bundle
@@ -187,11 +176,44 @@ jobs:
             --project-id ${{ steps.get_db.outputs.project_id }} \
             --sp-client-id ${{ steps.get_sp.outputs.sp_client_id }}
 
-      - name: Redeploy bundle with KA config and DB credentials
+      - name: Add app resources to databricks.yml
         run: |
-          databricks bundle deploy -t ${{ env.TARGET }} \
-            --var="serving_endpoint_name=${{ needs.scrape-and-create-ka.outputs.endpoint_name }}" \
-            --var="experiment_id=${{ needs.scrape-and-create-ka.outputs.experiment_id }}"
+          python3 - <<'EOF'
+          import yaml
+
+          endpoint_name = "${{ needs.scrape-and-create-ka.outputs.endpoint_name }}"
+          experiment_id = "${{ needs.scrape-and-create-ka.outputs.experiment_id }}"
+
+          with open("databricks.yml") as f:
+              config = yaml.safe_load(f)
+
+          config["resources"]["apps"]["databricks_chatbot"]["resources"] = [
+              {
+                  "name": "serving-endpoint",
+                  "description": "Databricks serving endpoint name for the AI agent",
+                  "serving_endpoint": {
+                      "name": endpoint_name,
+                      "permission": "CAN_QUERY",
+                  },
+              },
+              {
+                  "name": "experiment",
+                  "description": "MLflow experiment for collecting user feedback",
+                  "experiment": {
+                      "experiment_id": experiment_id,
+                      "permission": "CAN_EDIT",
+                  },
+              },
+          ]
+
+          with open("databricks.yml", "w") as f:
+              yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+
+          print(f"Added app resources — endpoint: {endpoint_name}, experiment: {experiment_id}")
+          EOF
+
+      - name: Redeploy bundle with app resources and DB credentials
+        run: databricks bundle deploy -t ${{ env.TARGET }}
 
   start-app:
     name: Start App
