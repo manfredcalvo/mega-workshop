@@ -55,9 +55,12 @@ def main():
     endpoint_name = f"{branch}/endpoints/primary"
     sp = args.sp_client_id
 
-    # Step 1: Create Postgres role for the service principal
+    # Step 1: Create Postgres role for the service principal (idempotent)
     print("Step 1: Creating Postgres role for service principal...")
     try:
+        w.postgres.get_role(name=f"{branch}/roles/app-sp")
+        print("  Role already exists, skipping")
+    except Exception:
         w.postgres.create_role(
             parent=branch,
             role_id="app-sp",
@@ -71,12 +74,6 @@ def main():
             )
         )
         print("  Role created successfully")
-    except Exception as e:
-        if "already exists" in str(e).lower():
-            print("  Role already exists, skipping")
-        else:
-            print(f"  Error: {e}")
-            sys.exit(1)
 
     # Step 2: Get endpoint host and connect
     print("\nStep 2: Getting Lakebase endpoint host...")
