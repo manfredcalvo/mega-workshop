@@ -80,7 +80,7 @@ jobs:
       - name: Extract KA endpoint and experiment ID
         id: extract
         run: |
-          KA_OUTPUT=$(jq -r '.task_outputs[] | select(.task_key == "create_ka") | .notebook_output.result' job_output.json)
+          KA_OUTPUT=$(jq -r '.task_outputs[] | select(.TaskKey == "create_ka") | .Output.result' job_output.json)
           ENDPOINT_NAME=$(echo "$KA_OUTPUT" | jq -r '.endpoint_name')
           EXPERIMENT_ID=$(echo "$KA_OUTPUT" | jq -r '.experiment_id')
           echo "endpoint_name=$ENDPOINT_NAME" >> "$GITHUB_OUTPUT"
