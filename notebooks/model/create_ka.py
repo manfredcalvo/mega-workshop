@@ -114,7 +114,7 @@ else:
 import time
 
 POLL_INTERVAL_SEC = 30
-TIMEOUT_SEC = 60 * 30  # 30 minutes max
+TIMEOUT_SEC = 60 * 60  # 60 minutes max
 
 from databricks.sdk.service.knowledgeassistants import KnowledgeSourceState
 
