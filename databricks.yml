@@ -82,17 +82,6 @@ resources:
       name: bcp-products
       description: "BCP Products Chat Bot"
       source_code_path: .
-      resources:
-        - name: serving-endpoint
-          description: "Databricks serving endpoint name for the AI agent"
-          serving_endpoint:
-            name: ${var.serving_endpoint_name}
-            permission: CAN_QUERY
-        - name: experiment
-          description: "MLflow experiment for collecting user feedback"
-          experiment:
-            experiment_id: ${var.experiment_id}
-            permission: CAN_EDIT
 
 targets:
   dev:
