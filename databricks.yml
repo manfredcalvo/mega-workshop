@@ -12,13 +12,13 @@ variables:
     default: "338429763563517"
   uc_catalog:
     description: "Unity Catalog catalog name for storing scraper output"
-    default: "users"
+    default: "workshop_andrea"
   uc_schema:
     description: "Unity Catalog schema name for storing scraper output"
-    default: "manffred_calvosanchez"
+    default: "bcp"
   uc_volume:
     description: "Unity Catalog volume name for storing scraper output"
-    default: "bcp"
+    default: "bcp-unstructured"
 
 resources:
   postgres_projects:
