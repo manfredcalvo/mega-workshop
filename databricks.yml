@@ -9,7 +9,7 @@ variables:
     description: "Suffix for resource names (app/lakebase instance names etc). Helpful for avoiding name collisions if multiple users deploy this app to the same workspace"
   experiment_id:
     description: "MLflow experiment ID for collecting user feedback"
-    default: "338429763563517"
+    default: ""
   uc_catalog:
     description: "Unity Catalog catalog name for storing scraper output"
     default: "workshop_andrea"

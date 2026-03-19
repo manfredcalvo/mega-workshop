@@ -53,6 +53,38 @@ jobs:
 
       - uses: databricks/setup-cli@main
 
+      - name: Strip app resources for initial deploy
+        run: |
+          python3 - <<'EOF'
+          import yaml
+
+          # Remove all app resource bindings so the initial deploy does not
+          # fail trying to resolve a KA endpoint or MLflow experiment that
+          # does not exist yet in the workspace.
+          with open("databricks.yml") as f:
+              config = yaml.safe_load(f)
+
+          config["resources"]["apps"]["databricks_chatbot"]["resources"] = []
+
+          with open("databricks.yml", "w") as f:
+              yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+
+          # Replace all valueFrom references in app.yaml with empty values
+          # so the runtime does not try to resolve unbound resources.
+          with open("app.yaml") as f:
+              app = yaml.safe_load(f)
+
+          for var in app.get("env", []):
+              if "valueFrom" in var:
+                  var["value"] = ""
+                  del var["valueFrom"]
+
+          with open("app.yaml", "w") as f:
+              yaml.dump(app, f, default_flow_style=False, allow_unicode=True)
+
+          print("Stripped app resources and valueFrom entries for initial deploy")
+          EOF
+
       - name: Validate bundle
         run: databricks bundle validate -t ${{ env.TARGET }}
 
