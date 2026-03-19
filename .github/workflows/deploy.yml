@@ -55,6 +55,7 @@ jobs:
 
       - name: Replace valueFrom entries in app.yaml for initial deploy
         run: |
+          pip install pyyaml -q
           python3 - <<'EOF'
           import yaml
 
@@ -178,6 +179,7 @@ jobs:
 
       - name: Add app resources to databricks.yml
         run: |
+          pip install pyyaml -q
           python3 - <<'EOF'
           import yaml
 
