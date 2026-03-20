@@ -20,7 +20,7 @@ Web Scrapers (Notebooks)
 | Backend | Express 5 + Vercel AI SDK (streaming) |
 | AI Agent | Databricks Knowledge Assistant (Agent Bricks) |
 | Database | Lakebase Autoscaling (managed PostgreSQL 17) |
-| Observability | MLflow traces + GenAI evaluation |
+| Observability | MLflow traces + GenAI evaluation + production monitoring |
 | Deployment | Databricks Asset Bundle (DAB) + Databricks Apps |
 
 ## Project Structure
@@ -40,8 +40,10 @@ bcp/
 │   │   └── scraper_loans.py          # Scrapes BCP loan product pages
 │   ├── model/
 │   │   └── create_ka.py             # Creates/updates Knowledge Assistant
-│   └── evaluations/
-│       └── model_evaluation.py       # MLflow GenAI evaluation (4 scorers)
+│   ├── evaluations/
+│   │   └── model_evaluation.py       # MLflow GenAI evaluation (4 scorers)
+│   └── monitoring/
+│       └── model_monitoring.py       # MLflow GenAI production monitoring (4 scorers)
 ├── scripts/
 │   ├── lakebase-role-setup.py        # Grants app SP database permissions
 │   ├── quickstart.sh                 # Interactive setup wizard
@@ -119,7 +121,7 @@ Run the job to scrape BCP product pages, create the Knowledge Assistant, and eva
 DATABRICKS_CONFIG_PROFILE=<your-profile> databricks bundle run create_and_deploy_model
 ```
 
-The job runs four tasks in sequence:
+The job runs five tasks in sequence:
 
 | Task | What it does |
 |------|-------------|
@@ -127,6 +129,7 @@ The job runs four tasks in sequence:
 | `scrape_loans` | Scrapes BCP loan pages → UC Volume |
 | `create_ka` | Creates/updates the KA, triggers sync, outputs endpoint name and experiment ID |
 | `model_evaluation` | Runs MLflow GenAI evaluation with a quality gate (≥85% RetrievalGroundedness) |
+| `model_monitoring` | Registers and starts continuous production monitoring scorers on the MLflow experiment |
 
 ### 5. Add app resource bindings
 
@@ -251,6 +254,21 @@ The `model_evaluation.py` notebook evaluates the KA using MLflow GenAI evaluatio
 The notebook raises an error (failing the job) if `RetrievalGroundedness` pass rate is ≤ 85%.
 
 Results are logged to the MLflow experiment for review in the Databricks UI.
+
+## Production Monitoring
+
+The `model_monitoring.py` notebook registers continuous MLflow GenAI scorers on the KA experiment so that every production trace is automatically evaluated in the background.
+
+The same four scorers used during offline evaluation are registered as live monitors:
+
+| Scorer | Sample rate |
+|--------|-------------|
+| `RetrievalGroundedness` | 100% |
+| `response_en_espanol` (Guidelines) | 100% |
+| `Safety` | 100% |
+| `RelevanceToQuery` | 100% |
+
+The notebook is **idempotent** — re-running it skips scorers that are already registered. Monitor results appear in the MLflow Experiment UI under the **Monitoring** tab, typically within 15–20 minutes of a trace being recorded.
 
 ## Human Feedback
 

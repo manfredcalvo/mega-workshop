@@ -72,6 +72,16 @@ resources:
               endpoint_name: "{{tasks.create_ka.values.endpoint_name}}"
               experiment_id: "{{tasks.create_ka.values.experiment_id}}"
           environment_key: default
+        - task_key: model_monitoring
+          depends_on:
+            - task_key: model_evaluation
+          notebook_task:
+            notebook_path: ./notebooks/monitoring/model_monitoring.py
+            source: WORKSPACE
+            base_parameters:
+              endpoint_name: "{{tasks.create_ka.values.endpoint_name}}"
+              experiment_id: "{{tasks.create_ka.values.experiment_id}}"
+          environment_key: default
       environments:
         - environment_key: default
           spec:
