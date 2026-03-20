@@ -34,13 +34,13 @@ print(f"Experiment ID: {experiment_id}")
 
 # COMMAND ----------
 import mlflow
-import mlflow.genai
 from mlflow.genai.scorers import (
     RetrievalGroundedness,
     Guidelines,
     Safety,
     RelevanceToQuery,
     ScorerSamplingConfig,
+    list_scorers,
 )
 
 mlflow.set_experiment(experiment_id=experiment_id)
@@ -64,7 +64,7 @@ SCORERS_TO_REGISTER = [
 # Get currently registered scorers for idempotency
 existing_scorers = {
     s.name
-    for s in mlflow.genai.monitoring.list_scorers(experiment_id=experiment_id)
+    for s in list_scorers(experiment_id=experiment_id)
 }
 print(f"Existing monitors: {existing_scorers or '(none)'}")
 
