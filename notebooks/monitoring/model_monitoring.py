@@ -40,8 +40,8 @@ from mlflow.genai.scorers import (
     Guidelines,
     Safety,
     RelevanceToQuery,
+    ScorerSamplingConfig,
 )
-from mlflow.genai.monitoring import ScorerSamplingConfig
 
 mlflow.set_experiment(experiment_id=experiment_id)
 
