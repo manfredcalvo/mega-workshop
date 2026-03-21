@@ -1,0 +1,287 @@
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "background":           "#0E1F27",
+    "primaryColor":         "#3D2000",
+    "primaryTextColor":     "#FFFFFF",
+    "primaryBorderColor":   "#F6C000",
+    "lineColor":            "#78909C",
+    "secondaryColor":       "#002028",
+    "tertiaryColor":        "#0D2229",
+    "clusterBkg":           "#0D2229",
+    "clusterBorder":        "#546E7A",
+    "titleColor":           "#FFFFFF",
+    "edgeLabelBackground":  "#152832",
+    "fontFamily":           "Segoe UI, Trebuchet MS, Arial, sans-serif",
+    "fontSize":             "15px"
+  },
+  "flowchart": {
+    "rankDir":      "LR",
+    "nodeSpacing":  55,
+    "rankSpacing":  120,
+    "padding":      45,
+    "curve":        "linear",
+    "htmlLabels":   true
+  }
+}}%%
+flowchart LR
+
+  classDef gold   fill:#2B1D00,stroke:#F6C000,stroke-width:3px,color:#FFE082,font-weight:bold
+  classDef orange fill:#3D0A04,stroke:#FF3621,stroke-width:3px,color:#FFCDD2,font-weight:bold
+  classDef teal   fill:#002028,stroke:#00BCD4,stroke-width:3px,color:#B2EBF2,font-weight:bold
+  classDef navy   fill:#071520,stroke:#4FC3F7,stroke-width:3px,color:#B3E5FC,font-weight:bold
+  classDef user   fill:#0D1E2E,stroke:#64B5F6,stroke-width:3px,color:#BBDEFB,font-weight:bold
+  classDef db     fill:#001820,stroke:#26C6DA,stroke-width:3px,color:#80DEEA,font-weight:bold
+  classDef purple fill:#1A0030,stroke:#CE93D8,stroke-width:3px,color:#E1BEE7,font-weight:bold
+  classDef cicd   fill:#0A1A10,stroke:#81C784,stroke-width:2px,color:#C8E6C9,font-style:italic
+
+  %% ═══════════════════════════════════════════
+  %%  SWIMLANE 1  —  DATA PIPELINE
+  %% ═══════════════════════════════════════════
+  subgraph SL1 ["  ➊  DATA PIPELINE  ·  Databricks Platform  "]
+    direction TB
+
+    NB1["📓 Credit Cards Scraper
+    ─────────────────────────────
+    Databricks Notebook
+    ─────────────────────────────
+    Source: bcp.com/tarjetas-de-credito
+    Scrapes BCP credit card product
+    pages on a scheduled trigger
+    Parses HTML into structured
+    Markdown files with product
+    details, rates, fees, requirements
+    ─────────────────────────────
+    Output: .md files per product"]
+
+    NB2["📓 Loans Scraper
+    ─────────────────────────────
+    Databricks Notebook
+    ─────────────────────────────
+    Source: bcp.com/prestamos
+    Scrapes BCP loan and personal
+    credit pages on schedule
+    Parses HTML into structured
+    Markdown with rates, terms,
+    eligibility and conditions
+    ─────────────────────────────
+    Output: .md files per product"]
+
+    VOL[("🗄  UC Volume
+    ─────────────────────────────
+    Unity Catalog Storage Layer
+    ─────────────────────────────
+    /Volumes/catalog/schema/volume
+    ─────────────────────────────
+    Stores all Markdown product
+    files written by scrapers
+    Single source of truth for
+    Knowledge Assistant indexing
+    Versioned · Access-controlled")]
+
+    NB1 -->|"write .md files"| VOL
+    NB2 -->|"write .md files"| VOL
+  end
+
+  %% ═══════════════════════════════════════════
+  %%  SWIMLANE 2  —  MODEL CREATION
+  %% ═══════════════════════════════════════════
+  subgraph SL2 ["  ➋  MODEL CREATION  ·  Databricks Platform  "]
+    direction TB
+
+    KA["🧠 Knowledge Assistant
+    ─────────────────────────────
+    Agent Bricks · KA
+    ─────────────────────────────
+    Reads Markdown files from
+    UC Volume automatically
+    Chunks documents into
+    optimal retrieval segments
+    Embeds chunks with managed
+    embedding model
+    Auto-creates and maintains
+    Vector Search index
+    Full retrieval pipeline
+    end-to-end without custom code"]
+
+    KA_EP["⚡ KA Serving Endpoint
+    ─────────────────────────────
+    Databricks Model Serving
+    ─────────────────────────────
+    Exposes KA as REST API
+    Protocol: Streaming HTTP / SSE
+    POST /v1/conversations/completions
+    Auth: Databricks OAuth token
+    ─────────────────────────────
+    Managed auto-scaling
+    Linked to MLflow experiment
+    for full trace observability"]
+
+    KA -->|"deploy & serve"| KA_EP
+  end
+
+  %% ═══════════════════════════════════════════
+  %%  SWIMLANE 3  —  CHAT APPLICATION
+  %% ═══════════════════════════════════════════
+  subgraph SL3 ["  ➌  CHAT APPLICATION  ·  Databricks Apps  "]
+    direction TB
+
+    USER["👤 BCP User
+    ─────────────────────────────
+    Web Browser / HTTPS
+    ─────────────────────────────
+    BCP staff or customers
+    asking product questions
+    in Spanish about credit
+    cards and personal loans"]
+
+    UI["⚛  React Frontend
+    ─────────────────────────────
+    React 18 + Vite 5 + Tailwind CSS 4
+    Components: Radix UI
+    State: Vercel AI SDK (@ai-sdk/react)
+    ─────────────────────────────
+    Streaming chat UI renders
+    SSE tokens in real-time
+    Conversation history sidebar
+    Databricks auth integration"]
+
+    API["🔧 Express Backend
+    ─────────────────────────────
+    Express 5 + TypeScript
+    Vercel AI SDK · Zod validation
+    ─────────────────────────────
+    POST /api/chat
+      Streams from KA Endpoint
+      Returns SSE to browser
+    GET  /api/chats
+      Returns full chat history
+    Proxies KA Serving Endpoint
+    with token injection"]
+
+    LAKEBASE[("🐘  Lakebase
+    ─────────────────────────────
+    Managed PostgreSQL
+    ─────────────────────────────
+    ORM: Drizzle ORM
+    Schema: ai_chatbot
+    ─────────────────────────────
+    Tables: User · Chat · Message_v2
+    ─────────────────────────────
+    Auto-scaling compute
+    Persistent conversation history
+    Databricks-managed backups")]
+
+    USER -->|"HTTPS"| UI
+    UI   -->|"REST + SSE"| API
+    API  -->|"Drizzle ORM\nSQL queries"| LAKEBASE
+    LAKEBASE -->|"chat history"| API
+    API  -->|"SSE token stream"| UI
+  end
+
+  %% ═══════════════════════════════════════════
+  %%  SWIMLANE 4  —  TRACING & MONITORING
+  %% ═══════════════════════════════════════════
+  subgraph SL4 ["  ➍  TRACING & MONITORING  ·  MLflow  "]
+    direction TB
+
+    MLX["📊 MLflow Experiment
+    ─────────────────────────────
+    Linked to KA experiment
+    ─────────────────────────────
+    Captures span-level traces
+    for every KA conversation
+    Stores full input / output
+    pairs per span for analysis
+    Builds production evaluation
+    dataset automatically
+    Foundation for offline eval
+    and online production scoring"]
+
+    EVAL["🧪 MLflow GenAI Evaluation
+    ─────────────────────────────
+    Trigger: CI/CD deploy gate
+    ─────────────────────────────
+    Metric: RetrievalGroundedness
+    Threshold: ≥ 85% to pass
+    Test set: 10 curated Spanish
+    questions on cards and loans
+    ─────────────────────────────
+    Blocks deployment on failure
+    Runs before every prod push"]
+
+    MON["📈 Production Monitor
+    ─────────────────────────────
+    Sample rate: 100% of traffic
+    Registration: idempotent
+    ─────────────────────────────
+    4 continuous online scorers:
+      · Groundedness
+      · Relevance
+      · Safety
+      · Language Attribution
+        (response_en_espanol)
+    ─────────────────────────────
+    Alerts on quality regression"]
+
+    MLX -->|"offline eval\non traces"| EVAL
+    MLX -->|"online scoring\npipeline"| MON
+  end
+
+  %% ═══════════════════════════════════════════
+  %%  CI/CD NOTE BOX
+  %% ═══════════════════════════════════════════
+  subgraph SL5 ["  ⚙  CI / CD  "]
+    direction LR
+
+    CICD["⚙  GitHub Actions + Databricks Asset Bundles
+    ─────────────────────────────────────────────────────────
+    Pipeline: Test  →  Evaluate (MLflow gate ≥ 85%)  →  Deploy
+    Targets: Dev (per-developer)  ·  Staging (shared QA)  ·  Prod (live traffic)
+    Deploys: notebooks · KA config · chat app bundle · DB schema migrations"]
+  end
+
+  %% ═══════════════════════════════════════════
+  %%  CROSS-SWIMLANE CONNECTIONS
+  %% ═══════════════════════════════════════════
+
+  %% Layout alignment hints
+  KA    ~~~ USER
+  KA_EP ~~~ API
+
+  %% SL1 → SL2
+  VOL    -->|"reads & indexes\nMarkdown content"| KA
+
+  %% SL2 → SL3
+  KA_EP  -->|"streaming inference\nPOST /v1/conversations/completions"| API
+
+  %% SL2 → SL4
+  KA     -.->|"links KA experiment"| MLX
+
+  %% SL3 → SL4
+  API    -->|"log traces & spans"| MLX
+
+  %% SL4 → CI/CD gate
+  EVAL   -.->|"score < 85%\nblock & re-deploy"| CICD
+
+  %% CI/CD → SL2 and SL3
+  CICD   -.->|"deploy notebooks\n& KA config"| KA
+  CICD   -.->|"deploy chat app\n& DB migrations"| API
+
+  %% ═══════════════════════════════════════════
+  %%  STYLE ASSIGNMENTS
+  %% ═══════════════════════════════════════════
+  class NB1,NB2,VOL gold
+  class KA,KA_EP orange
+  class USER user
+  class UI teal
+  class API navy
+  class LAKEBASE db
+  class MLX,EVAL,MON purple
+  class CICD cicd
+
+  style SL1 fill:#110D00,stroke:#F6C000,stroke-width:4px,color:#F6C000
+  style SL2 fill:#1A0500,stroke:#FF3621,stroke-width:4px,color:#FF3621
+  style SL3 fill:#001218,stroke:#00BCD4,stroke-width:4px,color:#00BCD4
+  style SL4 fill:#0F0020,stroke:#CE93D8,stroke-width:4px,color:#CE93D8
+  style SL5 fill:#051008,stroke:#81C784,stroke-width:2px,color:#81C784,stroke-dasharray:6 3
