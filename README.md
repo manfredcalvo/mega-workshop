@@ -42,8 +42,10 @@ bcp/
 │   │   └── create_ka.py             # Creates/updates Knowledge Assistant
 │   ├── evaluations/
 │   │   └── model_evaluation.py       # MLflow GenAI evaluation (4 scorers)
-│   └── monitoring/
-│       └── model_monitoring.py       # MLflow GenAI production monitoring (4 scorers)
+│   ├── monitoring/
+│   │   └── model_monitoring.py       # MLflow GenAI production monitoring (4 scorers)
+│   └── setup/
+│       └── lakebase_role_setup.py    # Lakebase role + permissions setup (notebook alternative to scripts/)
 ├── scripts/
 │   ├── lakebase-role-setup.py        # Grants app SP database permissions
 │   ├── quickstart.sh                 # Interactive setup wizard
@@ -187,6 +189,10 @@ env:
 
 ### 7. Grant database permissions
 
+You can run this step either locally or directly from the Databricks workspace.
+
+**Option A — Local script:**
+
 ```bash
 pip install "databricks-sdk>=0.81.0" "psycopg[binary]>=3.0"
 
@@ -195,6 +201,17 @@ python3 scripts/lakebase-role-setup.py \
   --project-id bcp-ka-db-<suffix> \
   --sp-client-id <service-principal-client-id>
 ```
+
+**Option B — Databricks notebook:**
+
+Open `notebooks/setup/lakebase_role_setup.py` in your workspace and set the two widget parameters:
+
+| Widget | Value |
+|--------|-------|
+| `project_id` | Lakebase project ID (e.g. `bcp-ka-db-dev-<username>`) |
+| `sp_client_id` | App service principal client ID (UUID from Step 6) |
+
+Then run all cells. The notebook installs its own dependencies and prints the resulting `app.yaml` values at the end.
 
 ### 8. Redeploy and start the app
 
