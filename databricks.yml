@@ -18,16 +18,6 @@ resources:
         experiment:
           experiment_id: ${resources.experiments.megacable_rag_experiment.experiment_id}
           permission: CAN_EDIT
-      - name: solutions-index
-        uc_securable:
-          permission: SELECT
-          securable_full_name: ${var.uc_catalog}.${var.uc_schema}.megacable_solutions_index
-          securable_type: TABLE
-      - name: kb-index
-        uc_securable:
-          permission: SELECT
-          securable_full_name: ${var.uc_catalog}.${var.uc_schema}.megacable_kb_index
-          securable_type: TABLE
       source_code_path: .
   jobs:
     create_and_deploy_model:
@@ -63,6 +53,7 @@ resources:
           base_parameters:
             experiment_id: ${resources.experiments.megacable_rag_experiment.experiment_id}
             resource_name_suffix: ${var.resource_name_suffix}
+            sample_ratio: ${var.sample_ratio}
             uc_catalog: ${var.uc_catalog}
             uc_schema: ${var.uc_schema}
             uc_volume: ${var.uc_volume}
@@ -77,6 +68,7 @@ resources:
             experiment_id: ${resources.experiments.megacable_rag_experiment.experiment_id}
             uc_catalog: ${var.uc_catalog}
             uc_schema: ${var.uc_schema}
+            lakebase_project_id: megacable-ka-db-${var.resource_name_suffix}
           notebook_path: ./notebooks/evaluations/model_evaluation.py
           source: WORKSPACE
         task_key: model_evaluation
@@ -113,7 +105,7 @@ variables:
     default: ''
     description: MLflow experiment ID for collecting user feedback
   lakebase_database_id:
-    default: db-qp0o-6pmctt6ixa
+    default: db-x6tv-gyvqwbp293
     description: 'Lakebase database ID — retrieved after first deploy via: databricks
       postgres list-databases projects/megacable-ka-db-<suffix>/branches/production
       --output json | jq -r ''.[0].name'''
@@ -129,3 +121,6 @@ variables:
   uc_volume:
     default: megacable-unstructured
     description: Unity Catalog volume name for storing scraper output
+  sample_ratio:
+    default: '0.1'
+    description: Fraction of KB docs to index (1.0 = all docs, 0.1 = 10%). Lower values speed up index creation.

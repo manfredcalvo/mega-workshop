@@ -21,31 +21,51 @@ from mlflow.types.responses import (
 
 config = ModelConfig(
     development_config={
-        "index_solutions": "workshop_andrea.megacable.megacable_solutions_index",
-        "index_kb": "workshop_andrea.megacable.megacable_kb_index",
-        "llm_endpoint": "databricks-gpt-5-1",
+        "table_solutions": "megacable_solutions",
+        "table_kb":        "megacable_kb",
+        "llm_endpoint":    "databricks-gpt-5-1",
     }
 )
 
-INDEX_SOLUTIONS = config.get("index_solutions")
-INDEX_KB        = config.get("index_kb")
+TABLE_SOLUTIONS = config.get("table_solutions")
+TABLE_KB        = config.get("table_kb")
 LLM_ENDPOINT    = config.get("llm_endpoint")
 
-# Graph is lazy-initialized on first request so DatabricksVectorSearch is not
-# instantiated at import time (credentials aren't available yet at module load).
+# Graph is lazy-initialized on first request so psycopg/pgvector are not
+# imported at module load time (credentials aren't available yet).
 _graph = None
+_sdk_client = None
+_pg_host = None
+_lakebase_endpoint_name = None
 
 
-def _vs_client_args() -> dict:
-    host = os.environ["DATABRICKS_HOST"]
-    if not host.startswith("https://"):
-        host = f"https://{host}"
-    return {
-        "workspace_url": host,
-        "service_principal_client_id": os.environ["DATABRICKS_CLIENT_ID"],
-        "service_principal_client_secret": os.environ["DATABRICKS_CLIENT_SECRET"],
-        "disable_notice": True,
-    }
+def _init_pg_config():
+    """Initialize Lakebase connection config once (idempotent)."""
+    global _sdk_client, _pg_host, _lakebase_endpoint_name
+    if _pg_host is not None:
+        return
+    from databricks.sdk import WorkspaceClient
+    _sdk_client = WorkspaceClient()
+    _pg_host = os.environ["LAKEBASE_ENDPOINT"]
+    # Derive project ID from env var or from hostname first component
+    # (Lakebase hostnames follow: <project_id>.postgres.<region>.databricks.com)
+    project_id = os.environ.get("LAKEBASE_PROJECT_ID") or _pg_host.split(".")[0]
+    _lakebase_endpoint_name = (
+        f"projects/{project_id}/branches/production/endpoints/primary"
+    )
+
+
+def _pg_conn_fn() -> str:
+    """Return a fresh PostgreSQL connection string with a current OAuth token."""
+    _init_pg_config()
+    cred = _sdk_client.postgres.generate_database_credential(
+        endpoint=_lakebase_endpoint_name
+    )
+    client_id = os.environ["DATABRICKS_CLIENT_ID"]
+    return (
+        f"postgresql://{client_id}:{cred.token}"
+        f"@{_pg_host}:5432/databricks_postgres?sslmode=require"
+    )
 
 
 def _get_graph():
@@ -53,10 +73,10 @@ def _get_graph():
     if _graph is None:
         from megacable_agent.core import build_graph
         _graph = build_graph(
-            index_solutions=INDEX_SOLUTIONS,
-            index_kb=INDEX_KB,
+            pg_conn_fn=_pg_conn_fn,
+            table_solutions=TABLE_SOLUTIONS,
+            table_kb=TABLE_KB,
             llm_endpoint=LLM_ENDPOINT,
-            vs_client_args=_vs_client_args(),
         )
     return _graph
 

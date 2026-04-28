@@ -4,11 +4,11 @@
 
 A production-ready AI chatbot for **Megacable** that answers questions in Spanish about Megacable's 8 enterprise B2B solution categories. It runs on Databricks and combines:
 
-- A **custom LangGraph RAG agent** running directly inside the Databricks App process (**Agents on Apps** — no separate model serving endpoint), backed by two Databricks Vector Search DELTA_SYNC indexes:
-  1. Scraped markdown from [mcmtechco.com/soluciones](https://www.mcmtechco.com/soluciones/) (8 solution pages) → `megacable_solutions_index`
-  2. An internal telecom support knowledge base translated to Spanish via `ai_translate()` → `megacable_kb_index`
+- A **custom LangGraph RAG agent** running directly inside the Databricks App process (**Agents on Apps** — no separate model serving endpoint), backed by two **pgvector** tables on Lakebase:
+  1. Scraped markdown from [mcmtechco.com/soluciones](https://www.mcmtechco.com/soluciones/) (8 solution pages) → `ai_vectorstore.megacable_solutions`
+  2. An internal telecom support knowledge base translated to Spanish via `ai_translate()` → `ai_vectorstore.megacable_kb`
 - A **React + Express** chat UI deployed as a Databricks App with **MEGA** branding
-- **Lakebase Autoscaling (PostgreSQL 17)** for persistent chat history
+- **Lakebase Autoscaling (PostgreSQL 17)** for both chat history (`ai_chatbot` schema) and vector search (`ai_vectorstore` schema)
 - **MLflow** for traces, human feedback, GenAI evaluation, and production monitoring
 
 The chatbot covers these 8 solution areas: [Hiper] Conectividad, Colaboración | Symphony, Ciberseguridad, Nube | Hiperconvergencia, Megacable Data Center, Seguridad Física, Infraestructura como Servicio, Carriers.
@@ -19,7 +19,7 @@ Browser → Node.js Express (PORT, external)
               → /api/chat → AI SDK → API_PROXY=localhost:8080/invocations
                                          → Python FastAPI / uvicorn (port 8080, internal)
                                                → LangGraph RAG agent
-                                                     → DatabricksVectorSearch × 2
+                                                     → pgvector on Lakebase × 2 (cosine ANN)
                                                      → ChatDatabricks (GPT-5)
 ```
 
@@ -50,7 +50,7 @@ megacable/
 │   │   ├── scraper_solutions.py              # Scrapes 8 Megacable solution pages → output_solutions/
 │   │   └── translate_knowledge_base.py       # Batch-translates knowledge_base_md → knowledge_base_md_es/ using ai_translate()
 │   ├── model/
-│   │   ├── create_vs_indexes.py              # Active pipeline: loads markdown → Delta tables + VS indexes
+│   │   ├── create_vs_indexes.py              # Active pipeline: embeds markdown → pgvector tables on Lakebase
 │   │   ├── create_rag_agent.py               # Alternative (model-serving): logs/registers agent to UC
 │   │   ├── rag_agent_model.py                # Alternative (model-serving): MLflow ResponsesAgent entry point
 │   │   └── deploy_model.py                   # Alternative (model-serving): deploys serving endpoint
@@ -90,8 +90,6 @@ megacable/
 |---|---|---|
 | `postgres` | Lakebase Autoscaling | `CAN_CONNECT_AND_CREATE` |
 | `experiment` | MLflow Experiment | `CAN_EDIT` |
-| `solutions-index` | UC Securable (VS index) | `SELECT` |
-| `kb-index` | UC Securable (VS index) | `SELECT` |
 
 **Key variables:**
 
@@ -127,7 +125,7 @@ translate_knowledge_base ──────────► create_vs_indexes ─
 |---|---|---|
 | `scrape_solutions` | `notebooks/data_processing/scraper_solutions.py` | Scrapes mcmtechco.com/soluciones (8 pages) → markdown in `output_solutions/` |
 | `translate_knowledge_base` | `notebooks/data_processing/translate_knowledge_base.py` | Reads all `.md` from `knowledge_base_md/` via Spark binaryFile, calls `ai_translate()` in batch, writes to `knowledge_base_md_es/` |
-| `create_vs_indexes` | `notebooks/model/create_vs_indexes.py` | Loads markdown into Delta tables (CDF enabled), creates/syncs two DELTA_SYNC Vector Search indexes |
+| `create_vs_indexes` | `notebooks/model/create_vs_indexes.py` | Embeds markdown from UC Volume using `databricks-gte-large-en`, upserts into two pgvector tables on Lakebase (`ai_vectorstore` schema) |
 | `model_evaluation` | `notebooks/evaluations/model_evaluation.py` | Imports `build_graph()` from `megacable_agent.core`, evaluates with 10 questions in Spanish, 4 scorers, quality gate ≥80% `RetrievalGroundedness` |
 | `model_monitoring` | `notebooks/monitoring/model_monitoring.py` | Registers same 4 scorers as continuous monitors at 100% sample rate |
 
@@ -143,7 +141,7 @@ build-app → deploy-bundle → scrape-and-deploy-model → setup-db-and-redeplo
 |---|---|
 | `build-app` | `npm ci` → lint (Biome) → build client → build server |
 | `deploy-bundle` | Strip `valueFrom` refs from `app.yaml` (phase 1 deploy — no resources exist yet), validate, deploy |
-| `scrape-and-deploy-model` | Extract UC vars → upload `knowledge_base_md/` → run full job pipeline (scrape → translate → VS indexes → evaluate → monitor) |
+| `scrape-and-deploy-model` | Extract UC vars → upload `knowledge_base_md/` → run full job pipeline (scrape → translate → pgvector ingest → evaluate → monitor) |
 | `setup-db-and-redeploy` | Get Lakebase DB ID → get app SP → run role setup → inject `lakebase_database_id` into `databricks.yml` → redeploy |
 | `start-app` | `databricks bundle run databricks_chatbot` |
 
@@ -290,7 +288,7 @@ npm run db:studio        # Drizzle Studio (visual DB browser)
 | **Agent @invoke/@stream** | `agent_server/agent.py` — wires `build_graph()` to MLflow handlers |
 | **Agent FastAPI server** | `agent_server/start_server.py` — `AgentServer("ResponsesAgent")` on port 8080 |
 | **App entry point** | `scripts/start_app.py` — starts uvicorn (bg) then `npm run start` |
-| VS index creation | `notebooks/model/create_vs_indexes.py` |
+| pgvector ingestion | `notebooks/model/create_vs_indexes.py` |
 | Model evaluation (offline) | `notebooks/evaluations/model_evaluation.py` |
 | React root | `client/src/App.tsx` |
 | Chat UI | `client/src/components/chat.tsx` |
@@ -309,43 +307,39 @@ npm run db:studio        # Drizzle Studio (visual DB browser)
 
 ## Notebooks — Key Patterns
 
-### Adding a new knowledge source (new Vector Search index)
+### Adding a new knowledge source (new pgvector table)
 
 To add a new data source to the RAG agent:
 1. Add a new scraper/translation notebook that writes markdown to a new UC Volume directory
-2. Add Delta table loading + VS index creation to `notebooks/model/create_vs_indexes.py`
-3. In `megacable_agent/core.py` (`build_graph()`), add a new `DatabricksVectorSearch` store and a new `@tool`-decorated retriever function
-4. Add the new index as a `uc_securable` resource in the app section of `databricks.yml`
+2. Add a new table + ingestion loop to `notebooks/model/create_vs_indexes.py`
+3. In `megacable_agent/core.py` (`build_graph()`), add a new `_search(table, query)` call and `@tool`-decorated retriever
+4. Add the new table name as a parameter to `build_graph()` and wire it through `agent_server/agent.py`
 5. Re-run the job and redeploy the app
 
 ### Shared agent code (`megacable_agent/core.py`)
 
-`build_graph(index_solutions, index_kb, llm_endpoint, system_prompt, vs_client_args)` is the single source of truth for the LangGraph agent.
+`build_graph(pg_conn_fn, table_solutions, table_kb, embedding_endpoint, llm_endpoint, system_prompt)` is the single source of truth for the LangGraph agent.
 
-- **In Databricks Apps** (`agent_server/agent.py`): pass `vs_client_args` with `workspace_url`, `service_principal_client_id`, `service_principal_client_secret` (read from env vars `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` — injected by the Apps platform). `DATABRICKS_HOST` may lack `https://` — always normalize: `if not host.startswith("https://"): host = f"https://{host}"`.
-- **In notebooks** (`model_evaluation.py`): pass `vs_client_args=None` — notebook auto-auth handles credentials. Add repo root to `sys.path` first so the package is importable.
+- **In Databricks Apps** (`agent_server/agent.py`): `_pg_conn_fn()` calls `WorkspaceClient().postgres.generate_database_credential(endpoint=...)` on every retrieval to get a fresh Lakebase OAuth token. The project ID is derived from `LAKEBASE_ENDPOINT` hostname or `LAKEBASE_PROJECT_ID` env var.
+- **In notebooks** (`model_evaluation.py`): pass a `pg_conn_fn` closure that calls `w.postgres.generate_database_credential()` with the `lakebase_project_id` widget value. Add repo root to `sys.path` first so the package is importable.
 
-### VectorSearchClient auth in Databricks Apps
+### Lakebase auth for pgvector (Databricks Apps)
 
-`DatabricksVectorSearch` wraps `VectorSearchClient`. In Databricks Apps, credentials arrive as `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` (M2M OAuth), not `DATABRICKS_TOKEN`. Pass them explicitly via `client_args`:
+Lakebase uses Databricks OAuth tokens as the PostgreSQL password. Since tokens expire (~1hr), `_pg_conn_fn()` in `agent_server/agent.py` generates a fresh credential on **every retrieval call**. The `WorkspaceClient()` is cached; `generate_database_credential` is called each time:
 
 ```python
-client_args = {
-    "workspace_url": "https://<host>",          # normalize — env var may lack https://
-    "service_principal_client_id": os.environ["DATABRICKS_CLIENT_ID"],
-    "service_principal_client_secret": os.environ["DATABRICKS_CLIENT_SECRET"],
-    "disable_notice": True,
-}
-DatabricksVectorSearch(index_name=..., client_args=client_args)
+cred = _sdk_client.postgres.generate_database_credential(endpoint=_lakebase_endpoint_name)
+return f"postgresql://{client_id}:{cred.token}@{pg_host}:5432/databricks_postgres?sslmode=require"
 ```
 
-Do NOT pass `token=...` — that parameter doesn't exist in `databricks-vectorsearch>=0.67`.
+The Lakebase endpoint name is: `projects/{project_id}/branches/production/endpoints/primary`
+where `project_id` = first component of `LAKEBASE_ENDPOINT` hostname (or `LAKEBASE_PROJECT_ID` env var).
 
 ### Changing the scraper target
 
 Edit `notebooks/data_processing/scraper_solutions.py`:
 - Update the `SOLUTIONS` list (name, slug, url)
-- Output always goes to `output_solutions/` — the `megacable_solutions_index` vector search index syncs from that directory
+- Output always goes to `output_solutions/` — the pgvector ingestion notebook reads from there
 
 ### RETRIEVER span format — critical for RetrievalGroundedness
 
@@ -375,7 +369,7 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from megacable_agent.core import build_graph
-graph = build_graph(index_solutions=INDEX_SOLUTIONS, index_kb=INDEX_KB)
+graph = build_graph(pg_conn_fn=pg_conn_fn)  # pg_conn_fn calls generate_database_credential
 ```
 
 ### Translation notebook performance note
@@ -413,10 +407,10 @@ graph = build_graph(index_solutions=INDEX_SOLUTIONS, index_kb=INDEX_KB)
 | Translation job slow | Ensure it uses Spark binaryFile + batch `ai_translate()`. Do NOT use per-file `spark.sql()` loops |
 | `valueFrom` resolution error on first deploy | Expected — initial deploy strips all `valueFrom` refs. Run the full pipeline then redeploy with resources |
 | `RetrievalGroundedness` 0% in evaluation | RETRIEVER span output must be `List[mlflow.entities.Document]`, not strings. Call `build_graph()` directly — do not use `mlflow.pyfunc.load_model()` |
-| `ValueError: The index has the source column configured as 'content'. Do not pass the text_column parameter` | Remove the `text_column` argument from `DatabricksVectorSearch(...)` — DELTA_SYNC indexes infer it automatically |
-| `VectorSearchClient.__init__() got an unexpected keyword argument 'token'` | Use `service_principal_client_id` + `service_principal_client_secret` in `client_args`, not `token` |
-| `No scheme supplied` / URL missing `https://` | `DATABRICKS_HOST` env var has no protocol prefix — normalize: `if not host.startswith("https://"): host = f"https://{host}"` |
+| pgvector tables empty / retrieval returns nothing | Run the `create_vs_indexes` job task — it populates `ai_vectorstore.megacable_solutions` and `ai_vectorstore.megacable_kb` |
+| `psycopg.errors.UndefinedTable: relation "ai_vectorstore.megacable_solutions" does not exist` | pgvector ingestion notebook has not run yet, or ran against a different project ID |
+| `permission denied for schema ai_vectorstore` | Re-run `lakebase-role-setup.py` — it now grants permissions on `ai_vectorstore` schema in addition to `ai_chatbot` |
+| `generate_database_credential` fails in app | Endpoint name wrong — check `LAKEBASE_PROJECT_ID` env var or verify that the hostname prefix matches the project ID |
 | Agent server not starting (ECONNREFUSED 8080) | Check that `scripts/__init__.py` exists — without it `uv run start-app` can't import `scripts.start_app` |
 | `PERMISSION_DENIED` on MLflow experiment at startup | Experiment resource binding needs `CAN_EDIT` (not `CAN_READ`) — update in `databricks.yml` |
-| `securable_kind` error on bundle deploy | `securable_kind` is read-only — remove it from `uc_securable` resource block in `databricks.yml` |
-| pip install exits with code 2 — SDK version conflict | Use `uv pip compile` to resolve; key: `databricks-vectorsearch>=0.67` (langchain requires `>=0.50`, old pin `==0.40` conflicts) |
+| pip install exits with code 2 — psycopg conflict | `psycopg[binary]>=3.0` requires Python ≥3.8; ensure the cluster runtime matches |

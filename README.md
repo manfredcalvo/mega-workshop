@@ -1,6 +1,6 @@
 # Megacable Enterprise Solutions Chat Bot
 
-A production-ready AI chatbot that answers questions about Megacable's 8 enterprise solution categories in Spanish. Built on Databricks with a custom **LangGraph RAG agent** (MLflow `ResponsesAgent`) backed by Databricks Vector Search, a React + Express frontend, Lakebase Autoscaling for persistent chat history, and MLflow for traces, evaluations, and human feedback.
+A production-ready AI chatbot that answers questions about Megacable's 8 enterprise solution categories in Spanish. Built on Databricks with a custom **LangGraph RAG agent** (MLflow `ResponsesAgent`) backed by **pgvector on Lakebase**, a React + Express frontend, Lakebase Autoscaling for persistent chat history and vector search, and MLflow for traces, evaluations, and human feedback.
 
 ## Using Claude Code with This Project
 
@@ -61,16 +61,16 @@ The agent runs **inside the Databricks App process** (Agents on Apps) — no sep
 ```
 Web Scraper (Notebooks)                   Knowledge Base (local → volume)
   └─► output_solutions/ (UC Volume)         └─► knowledge_base_md_es/ (translated)
-        └─► megacable_solutions_index          └─► megacable_kb_index
-              └──────────── (Vector Search DELTA_SYNC indexes) ───────────────┘
-                                                        │
-Browser → Node.js Express (PORT, external)              │
-              → /api/chat → AI SDK → API_PROXY=localhost:8080/invocations
-                                         → Python FastAPI / uvicorn (port 8080, internal)
-                                               → LangGraph RAG agent ──────────────────┘
-                                                     → DatabricksVectorSearch × 2
+        └──────────── pgvector ingest notebook (databricks-gte-large-en) ──────────┐
+                                                                                    │
+Browser → Node.js Express (PORT, external)                                          │
+              → /api/chat → AI SDK → API_PROXY=localhost:8080/invocations           │
+                                         → Python FastAPI / uvicorn (port 8080)     │
+                                               → LangGraph RAG agent               │
+                                                     → pgvector on Lakebase ───────┘
+                                                         (ai_vectorstore schema)
                                                      → ChatDatabricks (GPT-5)
-              → Lakebase Autoscaling (PostgreSQL) — chat history
+              → Lakebase Autoscaling (PostgreSQL) — chat history (ai_chatbot schema)
               → MLflow Experiment — traces + human feedback
 ```
 
@@ -79,8 +79,8 @@ Browser → Node.js Express (PORT, external)              │
 | Frontend | React 18 + Vite + Tailwind CSS |
 | Backend | Express 5 + Vercel AI SDK (streaming) |
 | AI Agent | Custom LangGraph ReAct agent (MLflow `ResponsesAgent`) |
-| Vector Search | Databricks Vector Search — two DELTA_SYNC indexes |
-| Database | Lakebase Autoscaling (managed PostgreSQL 17) |
+| Vector Search | pgvector on Lakebase — two tables in `ai_vectorstore` schema (HNSW cosine index) |
+| Database | Lakebase Autoscaling (managed PostgreSQL 17) — chat history + vector search |
 | Observability | MLflow traces + GenAI evaluation + production monitoring |
 | Deployment | Databricks Asset Bundle (DAB) + Databricks Apps |
 
@@ -119,7 +119,7 @@ megacable/
 │   │   ├── scraper_solutions.py              # Scrapes 8 Megacable solution pages
 │   │   └── translate_knowledge_base.py       # Translates knowledge_base_md to Spanish via ai_translate()
 │   ├── model/
-│   │   ├── create_vs_indexes.py              # Active pipeline: loads markdown → Delta tables + VS indexes
+│   │   ├── create_vs_indexes.py              # Active pipeline: embeds markdown → pgvector tables on Lakebase
 │   │   ├── create_rag_agent.py               # Alternative (model-serving): logs/registers agent to UC
 │   │   ├── rag_agent_model.py                # Alternative (model-serving): MLflow ResponsesAgent entry point
 │   │   └── deploy_model.py                   # Alternative (model-serving): deploys serving endpoint
@@ -150,12 +150,11 @@ megacable/
 | **Databricks Apps** | Must be enabled in the workspace |
 | **Serverless Compute** | Required for notebook jobs |
 | **Unity Catalog** | Catalog + schema + volume for scraped data and translated knowledge base |
-| **Databricks Vector Search** | Standard endpoint + two DELTA_SYNC indexes |
-| **Lakebase Autoscaling** | PostgreSQL 17 — persistent chat history |
+| **Lakebase Autoscaling** | PostgreSQL 17 — chat history (`ai_chatbot`) + vector search (`ai_vectorstore`) |
 | **MLflow** | Traces, GenAI evaluation, production monitoring (built in to Databricks) |
 | **AI Functions** | `ai_translate()` used by the translation notebook — requires SQL warehouse access |
 | **LLM endpoint** | `databricks-gpt-5-1` — must be available in the workspace (Foundation Model APIs) |
-| **Embedding endpoint** | `databricks-gte-large-en` — used to build the Vector Search indexes |
+| **Embedding endpoint** | `databricks-gte-large-en` — used to embed documents into pgvector tables (1024 dims) |
 
 ### Local Machine
 
@@ -176,7 +175,8 @@ These are installed automatically by `uv` when the app starts.
 |---------|---------|
 | `mlflow` | ≥3.11.1 |
 | `databricks-langchain` | ≥0.19.0 |
-| `databricks-vectorsearch` | ≥0.67 |
+| `psycopg[binary]` | ≥3.0 |
+| `pgvector` | ≥0.3.0 |
 | `langgraph` | ≥1.1.8 |
 | `databricks-sdk` | ≥0.105.0 |
 | `fastapi` | ≥0.129.0 |
@@ -191,14 +191,13 @@ Installed at the top of each notebook with `%pip install -r ../../requirements.t
 |---------|---------------|
 | `mlflow` | 3.11.1 |
 | `databricks-langchain` | 0.19.0 |
-| `databricks-vectorsearch` | 0.67 |
+| `psycopg[binary]` | ≥3.0 |
+| `pgvector` | ≥0.3.0 |
 | `langgraph` | 1.1.8 |
 | `databricks-sdk` | 0.105.0 |
 | `databricks-agents` | 1.9.4 |
 | `beautifulsoup4` | 4.14.3 |
 | `requests` | 2.33.1 |
-
-> Versions are pinned to avoid pip backtracking. `databricks-vectorsearch>=0.67` is required because `databricks-langchain>=0.19.0` depends on it; older pins (`==0.40`) cause dependency conflicts.
 
 ### Environment Variables
 
@@ -282,7 +281,7 @@ databricks fs cp -r ./knowledge_base_md/ \
   --profile <your-profile>
 ```
 
-Then run the job to scrape Megacable solutions, translate the knowledge base, build Vector Search indexes, evaluate the agent, and register production monitors:
+Then run the job to scrape Megacable solutions, translate the knowledge base, ingest into pgvector, evaluate the agent, and register production monitors:
 
 ```bash
 DATABRICKS_CONFIG_PROFILE=<your-profile> databricks bundle run create_and_deploy_model
@@ -294,7 +293,7 @@ The job runs five tasks:
 |------|-----------|-------------|
 | `scrape_solutions` | — | Scrapes 8 Megacable solution pages → `output_solutions/` in UC Volume |
 | `translate_knowledge_base` | — | Translates `knowledge_base_md/` to Spanish via `ai_translate()` → `knowledge_base_md_es/` |
-| `create_vs_indexes` | both above | Loads markdown into Delta tables (CDF enabled), creates/syncs two DELTA_SYNC Vector Search indexes |
+| `create_vs_indexes` | both above | Embeds markdown using `databricks-gte-large-en`, upserts into two pgvector tables on Lakebase (`ai_vectorstore` schema) with HNSW indexes |
 | `model_evaluation` | `create_vs_indexes` | Builds the LangGraph agent directly, runs MLflow GenAI evaluation (10 questions, 4 scorers), quality gate ≥80% `RetrievalGroundedness` |
 | `model_monitoring` | `model_evaluation` | Registers continuous production monitoring scorers on the MLflow experiment |
 
@@ -318,20 +317,18 @@ variables:
     default: "<database-id-from-above>"
 ```
 
-Then redeploy to wire up all four app resource bindings (already declared in `databricks.yml`):
+Then redeploy to wire up the app resource bindings:
 
 ```bash
 DATABRICKS_CONFIG_PROFILE=<your-profile> databricks bundle deploy
 ```
 
-The four app bindings in `databricks.yml` are:
+The app bindings in `databricks.yml` are:
 
 | Binding | Type | Permission |
 |---------|------|-----------|
 | `postgres` | Lakebase Autoscaling | `CAN_CONNECT_AND_CREATE` |
 | `experiment` | MLflow Experiment | `CAN_EDIT` |
-| `solutions-index` | UC Securable (`megacable_solutions_index`) | `SELECT` |
-| `kb-index` | UC Securable (`megacable_kb_index`) | `SELECT` |
 
 ### 6. Grant database permissions
 
@@ -376,7 +373,7 @@ build-app → deploy-bundle → scrape-and-deploy-model → setup-db-and-redeplo
 |-----|-------------|
 | `build-app` | Lint + build client and server |
 | `deploy-bundle` | Strips `valueFrom` refs from `app.yaml` (phase 1 — resources don't exist yet), runs `databricks bundle deploy` |
-| `scrape-and-deploy-model` | Uploads `knowledge_base_md/` to the UC volume, runs the full `create_and_deploy_model` job (scrape → translate → VS indexes → evaluate → monitor) |
+| `scrape-and-deploy-model` | Uploads `knowledge_base_md/` to the UC volume, runs the full `create_and_deploy_model` job (scrape → translate → pgvector ingest → evaluate → monitor) |
 | `setup-db-and-redeploy` | Gets Lakebase database ID, injects `lakebase_database_id` into `databricks.yml`, runs role setup for the app SP, redeploys with all resource bindings |
 | `start-app` | `databricks bundle run databricks_chatbot` |
 
@@ -455,7 +452,7 @@ databricks bundle deploy -t staging
 
 ### Bundle deploy fails with "valueFrom" resolution error
 
-The app resource bindings reference resources (Lakebase database, MLflow experiment, VS indexes) that don't exist yet. This is expected on the first deploy — the CI/CD pipeline strips all `valueFrom` refs for the initial deploy, then reinjects them after the data pipeline creates the resources.
+The app resource bindings reference resources (Lakebase database, MLflow experiment) that don't exist yet. This is expected on the first deploy — the CI/CD pipeline strips all `valueFrom` refs for the initial deploy, then reinjects them after the data pipeline runs.
 
 ### `lakebase_database_id` not set — bundle deploy fails
 

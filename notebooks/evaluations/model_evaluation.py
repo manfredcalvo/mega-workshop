@@ -7,9 +7,9 @@ dbutils.library.restartPython()
 """
 Evaluates the Megacable RAG Agent using MLflow GenAI evaluation.
 
-Loads the registered model locally (mlflow.pyfunc.load_model) so that
-RETRIEVER spans are emitted in the calling notebook's trace context, which
-allows RetrievalGroundedness to inspect retrieved documents.
+Loads the agent directly via build_graph() so that RETRIEVER spans are
+emitted in the calling notebook's trace context, which allows
+RetrievalGroundedness to inspect retrieved documents.
 
 Scores responses with:
   - RetrievalGroundedness: answers are grounded in retrieved documents
@@ -18,22 +18,25 @@ Scores responses with:
   - RelevanceToQuery:      responses are relevant to the question asked
 
 Expects Databricks notebook widget parameters:
-  - experiment_id: MLflow experiment ID to log results to
-  - uc_catalog:    UC catalog name (used to build VS index names)
-  - uc_schema:     UC schema name (used to build VS index names)
+  - experiment_id:       MLflow experiment ID to log results to
+  - uc_catalog:          UC catalog name (unused in pgvector mode, kept for compat)
+  - uc_schema:           UC schema name (unused in pgvector mode, kept for compat)
+  - lakebase_project_id: Lakebase project ID (e.g. megacable-ka-db-prod)
 """
 
 # COMMAND ----------
-dbutils.widgets.text("experiment_id", "", "MLflow Experiment ID")
-dbutils.widgets.text("uc_catalog",    "", "UC Catalog")
-dbutils.widgets.text("uc_schema",     "", "UC Schema")
+dbutils.widgets.text("experiment_id",       "", "MLflow Experiment ID")
+dbutils.widgets.text("uc_catalog",          "", "UC Catalog")
+dbutils.widgets.text("uc_schema",           "", "UC Schema")
+dbutils.widgets.text("lakebase_project_id", "", "Lakebase Project ID")
 
-experiment_id = dbutils.widgets.get("experiment_id")
-uc_catalog    = dbutils.widgets.get("uc_catalog")
-uc_schema     = dbutils.widgets.get("uc_schema")
+experiment_id       = dbutils.widgets.get("experiment_id")
+uc_catalog          = dbutils.widgets.get("uc_catalog")
+uc_schema           = dbutils.widgets.get("uc_schema")
+lakebase_project_id = dbutils.widgets.get("lakebase_project_id")
 
-print(f"Experiment ID: {experiment_id}")
-print(f"UC:            {uc_catalog}.{uc_schema}")
+print(f"Experiment ID:  {experiment_id}")
+print(f"Lakebase:       {lakebase_project_id}")
 
 # COMMAND ----------
 import mlflow
@@ -168,7 +171,6 @@ evaluation_scorers = [
 # We rebuild it directly here (not via mlflow.pyfunc.load_model) so that RETRIEVER
 # spans land in mlflow.genai.evaluate's trace context, giving non-zero groundedness.
 import sys
-import os
 
 # Add repo root to path so megacable_agent package is importable in this notebook.
 _ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
@@ -176,16 +178,29 @@ _repo_root = "/Workspace" + "/".join(_ctx.notebookPath().get().split("/")[:-2])
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
+from databricks.sdk import WorkspaceClient
+import psycopg
 from megacable_agent.core import build_graph
 
-INDEX_SOLUTIONS = f"{uc_catalog}.{uc_schema}.megacable_solutions_index"
-INDEX_KB        = f"{uc_catalog}.{uc_schema}.megacable_kb_index"
+w = WorkspaceClient()
+_endpoint_name = f"projects/{lakebase_project_id}/branches/production/endpoints/primary"
+_endpoint      = w.postgres.get_endpoint(name=_endpoint_name)
+_pg_host       = _endpoint.status.hosts.host
+_pg_user       = w.current_user.me().user_name
 
-print(f"Index solutions: {INDEX_SOLUTIONS}")
-print(f"Index KB:        {INDEX_KB}")
+print(f"Lakebase host: {_pg_host}")
 
-# vs_client_args=None → DatabricksVectorSearch uses notebook auto-auth
-graph = build_graph(index_solutions=INDEX_SOLUTIONS, index_kb=INDEX_KB)
+
+def pg_conn_fn() -> str:
+    """Fresh connection string for each retrieval call."""
+    cred = w.postgres.generate_database_credential(endpoint=_endpoint_name)
+    return (
+        f"postgresql://{_pg_user}:{cred.token}"
+        f"@{_pg_host}:5432/databricks_postgres?sslmode=require"
+    )
+
+
+graph = build_graph(pg_conn_fn=pg_conn_fn)
 
 
 # mlflow.genai.evaluate unpacks the `inputs` dict as kwargs — parameter must be "input"
@@ -226,7 +241,7 @@ if score_columns:
         print(f"  {col:<45} {yes_rate:.1f}% yes")
 
 # COMMAND ----------
-# --- Quality gate: RetrievalGroundedness pass rate must be > 85% ---
+# --- Quality gate: RetrievalGroundedness pass rate must be > 80% ---
 RETRIEVAL_GROUNDEDNESS_THRESHOLD = 0.80
 
 groundedness_col = next(

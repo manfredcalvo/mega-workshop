@@ -2,19 +2,20 @@
 Shared LangGraph RAG agent for Megacable.
 
 Used by both:
-  - agent_server/agent.py   (Databricks Apps — pass vs_client_args for SP auth)
-  - notebooks/evaluations/  (Databricks notebooks — omit vs_client_args for auto-auth)
+  - agent_server/agent.py   (Databricks Apps — pass pg_conn_fn with SP OAuth auth)
+  - notebooks/evaluations/  (Databricks notebooks — pass pg_conn_fn with notebook auth)
 """
-from typing import Optional
+from typing import Callable
 
 import mlflow
-from databricks_langchain import ChatDatabricks, DatabricksVectorSearch
+from databricks_langchain import ChatDatabricks, DatabricksEmbeddings
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 from mlflow.entities import Document as MlflowDocument
 from mlflow.entities import SpanType
 
 LLM_ENDPOINT = "databricks-gpt-5-1"
+EMBEDDING_ENDPOINT = "databricks-gte-large-en"
 SYSTEM_PROMPT = (
     "Eres un asistente experto en las soluciones empresariales de Megacable. "
     "Responde siempre en español. Usa las herramientas de búsqueda para encontrar "
@@ -25,51 +26,59 @@ SYSTEM_PROMPT = (
 
 
 def build_graph(
-    index_solutions: str,
-    index_kb: str,
+    pg_conn_fn: Callable[[], str],
+    table_solutions: str = "megacable_solutions",
+    table_kb: str = "megacable_kb",
+    embedding_endpoint: str = EMBEDDING_ENDPOINT,
     llm_endpoint: str = LLM_ENDPOINT,
     system_prompt: str = SYSTEM_PROMPT,
-    vs_client_args: Optional[dict] = None,
 ):
     """
-    Build the Megacable LangGraph ReAct agent.
+    Build the Megacable LangGraph ReAct agent backed by pgvector on Lakebase.
 
     Args:
-        index_solutions: Full UC path of the solutions Vector Search index.
-        index_kb:        Full UC path of the knowledge base Vector Search index.
-        llm_endpoint:    Databricks model serving endpoint for the LLM.
-        system_prompt:   System prompt for the agent.
-        vs_client_args:  kwargs forwarded to VectorSearchClient (workspace_url,
-                         service_principal_client_id, service_principal_client_secret).
-                         Pass None when running in a Databricks notebook — auth is
-                         auto-detected from the notebook context.
+        pg_conn_fn:         Callable returning a fresh PostgreSQL connection string.
+                            Called on every retrieval so the OAuth token stays current.
+        table_solutions:    Table name in schema ai_vectorstore for solutions docs.
+        table_kb:           Table name in schema ai_vectorstore for KB docs.
+        embedding_endpoint: Databricks embedding model endpoint name.
+        llm_endpoint:       Databricks LLM model serving endpoint name.
+        system_prompt:      System prompt injected into the agent.
     Returns:
-        A compiled LangGraph graph ready to call .invoke() or .stream() on.
+        A compiled LangGraph graph.
     """
-    client_args = vs_client_args or {}
+    import psycopg
+    from pgvector.psycopg import register_vector
 
-    solutions_store = DatabricksVectorSearch(
-        index_name=index_solutions, **({"client_args": client_args} if client_args else {})
-    )
-    kb_store = DatabricksVectorSearch(
-        index_name=index_kb, **({"client_args": client_args} if client_args else {})
-    )
+    embeddings = DatabricksEmbeddings(endpoint=embedding_endpoint)
+
+    def _search(table: str, query: str, k: int = 5) -> list[MlflowDocument]:
+        query_vec = embeddings.embed_query(query)
+        with psycopg.connect(pg_conn_fn()) as conn:
+            register_vector(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT id, content, filename"
+                    f" FROM ai_vectorstore.{table}"
+                    f" ORDER BY embedding <=> %s LIMIT %s",
+                    (query_vec, k),
+                )
+                return [
+                    MlflowDocument(
+                        id=row[0],
+                        page_content=row[1],
+                        metadata={"filename": row[2]},
+                    )
+                    for row in cur.fetchall()
+                ]
 
     @mlflow.trace(span_type=SpanType.RETRIEVER)
     def megacable_solutions_retriever(query: str) -> list[MlflowDocument]:
-        lc_docs = solutions_store.similarity_search(query, k=5)
-        return [
-            MlflowDocument(id=str(i), page_content=doc.page_content, metadata=doc.metadata)
-            for i, doc in enumerate(lc_docs)
-        ]
+        return _search(table_solutions, query)
 
     @mlflow.trace(span_type=SpanType.RETRIEVER)
     def megacable_kb_retriever(query: str) -> list[MlflowDocument]:
-        lc_docs = kb_store.similarity_search(query, k=5)
-        return [
-            MlflowDocument(id=str(i), page_content=doc.page_content, metadata=doc.metadata)
-            for i, doc in enumerate(lc_docs)
-        ]
+        return _search(table_kb, query)
 
     @tool(
         "megacable_solutions_retriever",
