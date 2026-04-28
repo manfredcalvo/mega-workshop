@@ -2,13 +2,55 @@
 
 A production-ready AI chatbot that answers questions about Megacable's 8 enterprise solution categories in Spanish. Built on Databricks with a custom **LangGraph RAG agent** (MLflow `ResponsesAgent`) backed by **pgvector on Lakebase**, a React + Express frontend, Lakebase Autoscaling for persistent chat history and vector search, and MLflow for traces, evaluations, and human feedback.
 
+## Setup on Windows
+
+### Install the Databricks CLI
+
+```powershell
+# Option 1 — winget (recommended, no extra tools needed)
+winget install Databricks.DatabricksCLI
+
+# Option 2 — Chocolatey
+choco install databricks-cli
+
+# Option 3 — Manual
+# Download databricks_windows_amd64.zip from https://github.com/databricks/cli/releases/latest
+# Extract databricks.exe and add its folder to your PATH
+```
+
+Verify the install and authenticate:
+
+```powershell
+databricks --version
+databricks auth login --host https://<your-workspace>.cloud.databricks.com --profile <your-profile>
+```
+
+### Install Claude Code on Windows
+
+Claude Code is a Node.js CLI — no Anthropic subscription is required when you route it through the Databricks AI Gateway (see the next section).
+
+```powershell
+npm install -g @anthropic-ai/claude-code
+```
+
+Start it from the project directory:
+
+```powershell
+cd megacable
+claude
+```
+
+---
+
 ## Using Claude Code with This Project
 
 This project ships a `CLAUDE.md` that gives Claude Code full context about the architecture, deployment steps, and key file paths — so you can use Claude to deploy and develop the app without having to explain the project from scratch each session.
 
-### Configure Claude to use the Databricks AI Gateway
+### Connect Claude Code to Databricks (no Anthropic license required)
 
-Route all Claude Code API calls through your Databricks workspace AI Gateway instead of the Anthropic API directly. Create `.claude/settings.json` at the project root:
+Instead of paying for an Anthropic Claude Code subscription, you can route all Claude Code API calls through your **Databricks workspace AI Gateway**. Claude Code bills against your Databricks workspace spend — no separate Anthropic account or license is needed.
+
+Create `.claude/settings.json` at the project root:
 
 ```json
 {
@@ -27,16 +69,22 @@ Route all Claude Code API calls through your Databricks workspace AI Gateway ins
 
 | Variable | Description |
 |---|---|
-| `ANTHROPIC_BASE_URL` | Your workspace AI Gateway URL. Find it in the Databricks UI under **AI Gateway**. Format: `https://<workspace-id>.ai-gateway.cloud.databricks.com/anthropic` |
+| `ANTHROPIC_BASE_URL` | Your workspace AI Gateway URL. In the Databricks UI go to **AI Gateway → Gateway Routes** and copy the route URL. Format: `https://<workspace-id>.ai-gateway.cloud.databricks.com/anthropic` |
 | `ANTHROPIC_MODEL` | Primary model. Use a Databricks-hosted Claude model (e.g. `databricks-claude-opus-4-6`) |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | Model resolved when code requests the Opus family |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Model resolved when code requests the Sonnet family |
 | `CLAUDE_CODE_SUBAGENT_MODEL` | Model for Claude Code subagents (parallel/background tasks). Sonnet is recommended for cost |
 | `ANTHROPIC_CUSTOM_HEADERS` | `x-databricks-use-coding-agent-mode: true` enables extended tool-use limits on the AI Gateway |
-| `ANTHROPIC_AUTH_TOKEN` | A Databricks PAT for authenticating with the AI Gateway. **Do not commit this file** — add `.claude/settings.json` to `.gitignore` |
+| `ANTHROPIC_AUTH_TOKEN` | A Databricks PAT — **Settings → Developer → Access tokens**. **Do not commit this file** — add `.claude/settings.json` to `.gitignore` |
 | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | Set to `"1"` to disable Claude beta features not supported by the Databricks AI Gateway |
 
 > **Note:** `.claude/settings.json` is gitignored because it contains your PAT. Each developer creates their own copy locally.
+
+**How to get your AI Gateway URL:**
+1. Open your Databricks workspace
+2. Go to **Compute → AI Gateway** (left sidebar)
+3. Find or create a **Gateway Route** for Claude models
+4. Copy the **Route URL** — it looks like `https://<workspace-id>.ai-gateway.cloud.databricks.com/anthropic`
 
 ### What Claude knows about this project
 
