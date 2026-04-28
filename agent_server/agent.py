@@ -46,13 +46,11 @@ def _init_pg_config():
         return
     from databricks.sdk import WorkspaceClient
     _sdk_client = WorkspaceClient()
-    _pg_host = os.environ["LAKEBASE_ENDPOINT"]
-    # Derive project ID from env var or from hostname first component
-    # (Lakebase hostnames follow: <project_id>.postgres.<region>.databricks.com)
-    project_id = os.environ.get("LAKEBASE_PROJECT_ID") or _pg_host.split(".")[0]
-    _lakebase_endpoint_name = (
-        f"projects/{project_id}/branches/production/endpoints/primary"
-    )
+    # LAKEBASE_ENDPOINT is injected by the postgres resource binding as the
+    # full endpoint resource path (projects/{id}/branches/{b}/endpoints/{e}).
+    _lakebase_endpoint_name = os.environ["LAKEBASE_ENDPOINT"]
+    endpoint = _sdk_client.postgres.get_endpoint(name=_lakebase_endpoint_name)
+    _pg_host = endpoint.status.hosts.host
 
 
 def _pg_conn_fn() -> dict:
