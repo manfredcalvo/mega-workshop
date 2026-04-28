@@ -53,14 +53,15 @@ jobs:
 
       - uses: databricks/setup-cli@main
 
-      - name: Replace valueFrom entries in app.yaml for initial deploy
+      - name: Strip phase-1 blockers from app.yaml and databricks.yml
         run: |
           pip install pyyaml -q
           python3 - <<'EOF'
           import yaml
 
-          # Replace all valueFrom references with empty values so the initial
-          # deploy does not fail trying to resolve resources that don't exist yet.
+          # app.yaml: replace valueFrom references with empty values so the
+          # initial deploy does not fail trying to resolve resources that
+          # don't exist yet.
           with open("app.yaml") as f:
               app = yaml.safe_load(f)
 
@@ -72,7 +73,23 @@ jobs:
           with open("app.yaml", "w") as f:
               yaml.dump(app, f, default_flow_style=False, allow_unicode=True)
 
-          print("Replaced valueFrom entries for initial deploy")
+          print("app.yaml: replaced valueFrom entries")
+
+          # databricks.yml: strip the database: field from the app's postgres
+          # resource binding — the database doesn't exist yet on a fresh deploy.
+          with open("databricks.yml") as f:
+              config = yaml.safe_load(f)
+
+          app_resources = config.get("resources", {}).get("apps", {}) \
+              .get("databricks_chatbot", {}).get("resources", [])
+          for res in app_resources:
+              if res.get("name") == "postgres" and "postgres" in res:
+                  res["postgres"].pop("database", None)
+
+          with open("databricks.yml", "w") as f:
+              yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+
+          print("databricks.yml: stripped postgres database binding for phase-1 deploy")
           EOF
 
       - name: Validate bundle
@@ -81,13 +98,10 @@ jobs:
       - name: Deploy bundle
         run: databricks bundle deploy -t ${{ env.TARGET }}
 
-  scrape-and-create-ka:
-    name: Scrape Data, Translate KB & Create KA
+  scrape-and-deploy-model:
+    name: Scrape Data, Translate KB & Deploy Model
     needs: deploy-bundle
     runs-on: ubuntu-latest
-    outputs:
-      endpoint_name: ${{ steps.extract.outputs.endpoint_name }}
-      experiment_id: ${{ steps.extract.outputs.experiment_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -112,26 +126,13 @@ jobs:
             --overwrite
           echo "knowledge_base_md uploaded to volume."
 
-      - name: Run scrapers, translate KB and create KA
-        id: run_job
+      - name: Run scrape, translate, pgvector ingest, evaluate and monitor
         run: |
-          databricks bundle run create_and_deploy_model -t ${{ env.TARGET }} --output json > job_output.json
-          cat job_output.json
-
-      - name: Extract KA endpoint and experiment ID
-        id: extract
-        run: |
-          KA_OUTPUT=$(jq -r '.task_outputs[] | select(.TaskKey == "create_ka") | .Output.result' job_output.json)
-          ENDPOINT_NAME=$(echo "$KA_OUTPUT" | jq -r '.endpoint_name')
-          EXPERIMENT_ID=$(echo "$KA_OUTPUT" | jq -r '.experiment_id')
-          echo "endpoint_name=$ENDPOINT_NAME" >> "$GITHUB_OUTPUT"
-          echo "experiment_id=$EXPERIMENT_ID" >> "$GITHUB_OUTPUT"
-          echo "KA Endpoint: $ENDPOINT_NAME"
-          echo "Experiment ID: $EXPERIMENT_ID"
+          databricks bundle run create_and_deploy_model -t ${{ env.TARGET }}
 
   setup-db-and-redeploy:
     name: Setup DB Role & Redeploy with All Config
-    needs: [scrape-and-create-ka]
+    needs: [scrape-and-deploy-model]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -145,20 +146,43 @@ jobs:
       - name: Install Python dependencies
         run: pip install "databricks-sdk>=0.81.0" "psycopg[binary]>=3.0" pyyaml
 
-      - name: Get Lakebase project ID and database ID
+      - name: Create Lakebase project and get database ID
         id: get_db
         run: |
-          PROJECT_ID=$(databricks bundle summary -t ${{ env.TARGET }} --output json | jq -r '.resources.postgres_projects.chatbot_lakebase.project_id')
-          DB_ID=$(databricks postgres list-databases "projects/$PROJECT_ID/branches/production" --output json | jq -r '.[0].name')
+          SUFFIX=$(databricks bundle summary -t ${{ env.TARGET }} --output json \
+            | jq -r '.variables.resource_name_suffix.value')
+          PROJECT_ID="megacable-ka-db-$SUFFIX"
           echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
-          echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
           echo "Project ID: $PROJECT_ID"
-          echo "Database ID: $DB_ID"
+
+          # Create the project if it doesn't already exist
+          databricks postgres create-project "$PROJECT_ID" 2>&1 \
+            | grep -v "already exists" || true
+
+          # Poll until the production branch has a database
+          echo "Waiting for Lakebase database to be ready..."
+          for i in $(seq 1 30); do
+            DB_ID=$(databricks postgres list-databases \
+              "projects/$PROJECT_ID/branches/production" \
+              --output json 2>/dev/null | jq -r '.[0].name // empty')
+            if [ -n "$DB_ID" ]; then
+              echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
+              echo "Database ready: $DB_ID"
+              break
+            fi
+            echo "  attempt $i/30 — not ready yet, waiting 10s..."
+            sleep 10
+          done
+          if [ -z "$DB_ID" ]; then
+            echo "ERROR: Lakebase database did not become ready in time"
+            exit 1
+          fi
 
       - name: Get app service principal client ID
         id: get_sp
         run: |
-          SP_CLIENT_ID=$(databricks apps get megacable-solutions --output json | jq -r '.service_principal_client_id')
+          SP_CLIENT_ID=$(databricks apps get megacable-solutions --output json \
+            | jq -r '.service_principal_client_id')
           echo "sp_client_id=$SP_CLIENT_ID" >> "$GITHUB_OUTPUT"
           echo "Service Principal: $SP_CLIENT_ID"
 
@@ -168,48 +192,41 @@ jobs:
             --project-id ${{ steps.get_db.outputs.project_id }} \
             --sp-client-id ${{ steps.get_sp.outputs.sp_client_id }}
 
-      - name: Inject KA endpoint, experiment ID and Lakebase DB ID into databricks.yml
+      - name: Inject Lakebase DB ID and restore postgres app binding
         run: |
           python3 - <<'EOF'
           import yaml
 
-          endpoint_name = "${{ needs.scrape-and-create-ka.outputs.endpoint_name }}"
-          experiment_id = "${{ needs.scrape-and-create-ka.outputs.experiment_id }}"
-          db_id         = "${{ steps.get_db.outputs.db_id }}"
+          db_id      = "${{ steps.get_db.outputs.db_id }}"
+          project_id = "${{ steps.get_db.outputs.project_id }}"
 
           with open("databricks.yml") as f:
               config = yaml.safe_load(f)
 
-          # Set the lakebase database ID variable
+          # Update the lakebase_database_id variable
           config["variables"]["lakebase_database_id"]["default"] = db_id
 
-          # Add serving-endpoint and experiment app resources
-          # (postgres resource is already declared statically in databricks.yml)
-          existing = config["resources"]["apps"]["databricks_chatbot"].get("resources", [])
-          non_ka = [r for r in existing if r["name"] not in ("serving-endpoint", "experiment")]
-          config["resources"]["apps"]["databricks_chatbot"]["resources"] = non_ka + [
-              {
-                  "name": "serving-endpoint",
-                  "description": "Databricks serving endpoint name for the AI agent",
-                  "serving_endpoint": {
-                      "name": endpoint_name,
-                      "permission": "CAN_QUERY",
-                  },
-              },
-              {
-                  "name": "experiment",
-                  "description": "MLflow experiment for collecting user feedback",
-                  "experiment": {
-                      "experiment_id": experiment_id,
-                      "permission": "CAN_EDIT",
-                  },
-              },
-          ]
+          # Restore the database binding on the app's postgres resource
+          # (it was stripped for the phase-1 deploy)
+          suffix_var = "${var.resource_name_suffix}"
+          db_path = (
+              f"projects/megacable-ka-db-{suffix_var}/branches/production"
+              f"/databases/${{var.lakebase_database_id}}"
+          )
+          app_resources = (
+              config.get("resources", {})
+              .get("apps", {})
+              .get("databricks_chatbot", {})
+              .get("resources", [])
+          )
+          for res in app_resources:
+              if res.get("name") == "postgres" and "postgres" in res:
+                  res["postgres"]["database"] = db_path
 
           with open("databricks.yml", "w") as f:
               yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
 
-          print(f"databricks.yml updated — db_id={db_id}, endpoint={endpoint_name}, experiment={experiment_id}")
+          print(f"databricks.yml updated — lakebase_database_id={db_id}")
           EOF
 
       - name: Redeploy bundle with full config
