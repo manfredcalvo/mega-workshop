@@ -27,13 +27,16 @@ databricks auth login --host https://<your-workspace>.cloud.databricks.com --pro
 
 ### Install Claude Code on Windows
 
-Claude Code is a Node.js CLI — no Anthropic subscription is required when you route it through the Databricks AI Gateway (see the next section).
+No Anthropic subscription is required — pick any of the options below and connect it to the Databricks AI Gateway (see the next section).
 
-```powershell
-npm install -g @anthropic-ai/claude-code
-```
+| Option | How to install |
+|--------|---------------|
+| **Desktop app** (recommended, no Node.js needed) | Download the Windows installer from [claude.ai/code](https://claude.ai/code) |
+| **VS Code extension** | Open VS Code → Extensions → search **Claude Code** → Install |
+| **JetBrains plugin** | Open any JetBrains IDE → Plugins → search **Claude Code** → Install |
+| **npm CLI** | Requires Node.js 18+: `npm install -g @anthropic-ai/claude-code` |
 
-Start it from the project directory:
+To start the CLI from the project directory:
 
 ```powershell
 cd megacable
