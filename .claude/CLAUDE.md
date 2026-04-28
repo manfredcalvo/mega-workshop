@@ -364,7 +364,7 @@ The `@tool` wrapper calls this function and converts the result to a string for 
 ```python
 import sys
 ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
-repo_root = "/Workspace" + "/".join(ctx.notebookPath().get().split("/")[:-2])
+repo_root = "/Workspace" + "/".join(ctx.notebookPath().get().split("/")[:-3])
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 

@@ -140,6 +140,7 @@ print(f"Total: {len(solutions_rows) + len(kb_rows)} documents")
 
 # COMMAND ----------
 # --- Step 4 & 5: Embed and upsert into pgvector tables ---
+import numpy as np
 from databricks_langchain import DatabricksEmbeddings
 
 embeddings = DatabricksEmbeddings(endpoint=EMBEDDING_MODEL_NAME)
@@ -161,7 +162,9 @@ def upsert_batch(table, rows):
                     f" SET filename=EXCLUDED.filename,"
                     f"     content=EXCLUDED.content,"
                     f"     embedding=EXCLUDED.embedding",
-                    (row.id, row.filename, row.content, vec),
+                    # np.array required — register_vector maps ndarray → vector;
+                    # plain list is sent as double precision[] and INSERT fails.
+                    (row.id, row.filename, row.content, np.array(vec)),
                 )
         # committed on context manager exit
 

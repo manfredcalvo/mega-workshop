@@ -55,17 +55,19 @@ def _init_pg_config():
     )
 
 
-def _pg_conn_fn() -> str:
-    """Return a fresh PostgreSQL connection string with a current OAuth token."""
+def _pg_conn_fn() -> dict:
+    """Return fresh psycopg connection kwargs with a current OAuth token."""
     _init_pg_config()
     cred = _sdk_client.postgres.generate_database_credential(
         endpoint=_lakebase_endpoint_name
     )
-    client_id = os.environ["DATABRICKS_CLIENT_ID"]
-    return (
-        f"postgresql://{client_id}:{cred.token}"
-        f"@{_pg_host}:5432/databricks_postgres?sslmode=require"
-    )
+    return {
+        "host": _pg_host,
+        "dbname": "databricks_postgres",
+        "user": os.environ["DATABRICKS_CLIENT_ID"],
+        "password": cred.token,
+        "sslmode": "require",
+    }
 
 
 def _get_graph():

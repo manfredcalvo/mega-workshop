@@ -26,7 +26,7 @@ SYSTEM_PROMPT = (
 
 
 def build_graph(
-    pg_conn_fn: Callable[[], str],
+    pg_conn_fn: Callable[[], dict],
     table_solutions: str = "megacable_solutions",
     table_kb: str = "megacable_kb",
     embedding_endpoint: str = EMBEDDING_ENDPOINT,
@@ -37,8 +37,10 @@ def build_graph(
     Build the Megacable LangGraph ReAct agent backed by pgvector on Lakebase.
 
     Args:
-        pg_conn_fn:         Callable returning a fresh PostgreSQL connection string.
-                            Called on every retrieval so the OAuth token stays current.
+        pg_conn_fn:         Callable returning a dict of psycopg keyword args (host, user,
+                            password, dbname, sslmode). Called on every retrieval so the
+                            OAuth token stays current. Using a dict avoids URL-encoding
+                            issues with special characters in usernames/tokens.
         table_solutions:    Table name in schema ai_vectorstore for solutions docs.
         table_kb:           Table name in schema ai_vectorstore for KB docs.
         embedding_endpoint: Databricks embedding model endpoint name.
@@ -47,14 +49,21 @@ def build_graph(
     Returns:
         A compiled LangGraph graph.
     """
+    import numpy as np
     import psycopg
     from pgvector.psycopg import register_vector
 
     embeddings = DatabricksEmbeddings(endpoint=embedding_endpoint)
 
     def _search(table: str, query: str, k: int = 5) -> list[MlflowDocument]:
-        query_vec = embeddings.embed_query(query)
-        with psycopg.connect(pg_conn_fn()) as conn:
+        # np.array required — register_vector maps ndarray → vector type;
+        # a plain Python list is sent as double precision[] and the <=> operator fails.
+        query_vec = np.array(embeddings.embed_query(query))
+        # Use explicit try/finally — psycopg's __exit__ can raise during rollback
+        # on a broken connection, causing "generator didn't stop after throw()"
+        # when nested inside an @mlflow.trace-decorated function.
+        conn = psycopg.connect(**pg_conn_fn())
+        try:
             register_vector(conn)
             with conn.cursor() as cur:
                 cur.execute(
@@ -63,14 +72,18 @@ def build_graph(
                     f" ORDER BY embedding <=> %s LIMIT %s",
                     (query_vec, k),
                 )
-                return [
-                    MlflowDocument(
-                        id=row[0],
-                        page_content=row[1],
-                        metadata={"filename": row[2]},
-                    )
-                    for row in cur.fetchall()
-                ]
+                rows = cur.fetchall()
+            conn.commit()
+        finally:
+            conn.close()
+        return [
+            MlflowDocument(
+                id=row[0],
+                page_content=row[1],
+                metadata={"filename": row[2]},
+            )
+            for row in rows
+        ]
 
     @mlflow.trace(span_type=SpanType.RETRIEVER)
     def megacable_solutions_retriever(query: str) -> list[MlflowDocument]:

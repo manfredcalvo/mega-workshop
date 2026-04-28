@@ -174,7 +174,7 @@ import sys
 
 # Add repo root to path so megacable_agent package is importable in this notebook.
 _ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
-_repo_root = "/Workspace" + "/".join(_ctx.notebookPath().get().split("/")[:-2])
+_repo_root = "/Workspace" + "/".join(_ctx.notebookPath().get().split("/")[:-3])
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
@@ -191,13 +191,16 @@ _pg_user       = w.current_user.me().user_name
 print(f"Lakebase host: {_pg_host}")
 
 
-def pg_conn_fn() -> str:
-    """Fresh connection string for each retrieval call."""
+def pg_conn_fn() -> dict:
+    """Fresh psycopg connection kwargs for each retrieval call."""
     cred = w.postgres.generate_database_credential(endpoint=_endpoint_name)
-    return (
-        f"postgresql://{_pg_user}:{cred.token}"
-        f"@{_pg_host}:5432/databricks_postgres?sslmode=require"
-    )
+    return {
+        "host": _pg_host,
+        "dbname": "databricks_postgres",
+        "user": _pg_user,
+        "password": cred.token,
+        "sslmode": "require",
+    }
 
 
 graph = build_graph(pg_conn_fn=pg_conn_fn)
