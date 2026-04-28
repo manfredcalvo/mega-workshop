@@ -81,11 +81,6 @@ resources:
           notebook_path: ./notebooks/monitoring/model_monitoring.py
           source: WORKSPACE
         task_key: model_monitoring
-  postgres_projects:
-    chatbot_lakebase:
-      display_name: Megacable KA DB
-      pg_version: 17
-      project_id: megacable-ka-db-${var.resource_name_suffix}
 targets:
   dev:
     default: true
@@ -105,7 +100,7 @@ variables:
     default: ''
     description: MLflow experiment ID for collecting user feedback
   lakebase_database_id:
-    default: db-x6tv-gyvqwbp293
+    default: db-csde-110d7m7jz7
     description: 'Lakebase database ID — retrieved after first deploy via: databricks
       postgres list-databases projects/megacable-ka-db-<suffix>/branches/production
       --output json | jq -r ''.[0].name'''
@@ -122,5 +117,5 @@ variables:
     default: megacable-unstructured
     description: Unity Catalog volume name for storing scraper output
   sample_ratio:
-    default: '0.1'
+    default: '1.0'
     description: Fraction of KB docs to index (1.0 = all docs, 0.1 = 10%). Lower values speed up index creation.
