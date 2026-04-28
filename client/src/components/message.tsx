@@ -193,7 +193,7 @@ const PurePreviewMessage = ({
                       })}
                       style={
                         message.role === 'user'
-                          ? { backgroundColor: '#006cff' }
+                          ? { backgroundColor: '#0067b7' }
                           : undefined
                       }
                     >

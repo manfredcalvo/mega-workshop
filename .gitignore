@@ -5,3 +5,4 @@ output/
 output_loans/
 *.zip
 .DS_Store
+.claude/settings.json

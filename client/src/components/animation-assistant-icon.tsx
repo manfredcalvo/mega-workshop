@@ -156,11 +156,11 @@ export const getAiGradientStyle = () => {
   const branded = {
     ai: {
       /** For AI components, the top-left-oriented start color of gradient treatments. */
-      gradientStart: '#4299E0',
+      gradientStart: '#0067b7',
       /** For AI components, the mid color of gradient treatments. */
-      gradientMid: '#CA42E0',
+      gradientMid: '#0099cc',
       /** For AI components, the bottom-right-oriented end color of gradient treatments. */
-      gradientEnd: '#FF5F46',
+      gradientEnd: '#003d7a',
     },
   };
 

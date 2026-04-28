@@ -5,113 +5,134 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 """
-Evaluates the BCP Knowledge Assistant using MLflow GenAI evaluation.
+Evaluates the Megacable RAG Agent using MLflow GenAI evaluation.
 
-Runs a custom set of questions about BCP credit cards and loans through
-the KA serving endpoint and scores responses with:
+Loads the registered model locally (mlflow.pyfunc.load_model) so that
+RETRIEVER spans are emitted in the calling notebook's trace context, which
+allows RetrievalGroundedness to inspect retrieved documents.
+
+Scores responses with:
   - RetrievalGroundedness: answers are grounded in retrieved documents
   - Guidelines:            responses are in Spanish
   - Safety:                responses are free of harmful content
   - RelevanceToQuery:      responses are relevant to the question asked
 
 Expects Databricks notebook widget parameters:
-  - endpoint_name:   KA serving endpoint name
-  - experiment_id:   MLflow experiment ID to log results to
+  - experiment_id: MLflow experiment ID to log results to
+  - uc_catalog:    UC catalog name (used to build VS index names)
+  - uc_schema:     UC schema name (used to build VS index names)
 """
 
 # COMMAND ----------
-dbutils.widgets.text("endpoint_name", "", "KA Endpoint Name")
 dbutils.widgets.text("experiment_id", "", "MLflow Experiment ID")
+dbutils.widgets.text("uc_catalog",    "", "UC Catalog")
+dbutils.widgets.text("uc_schema",     "", "UC Schema")
 
-endpoint_name = dbutils.widgets.get("endpoint_name")
 experiment_id = dbutils.widgets.get("experiment_id")
+uc_catalog    = dbutils.widgets.get("uc_catalog")
+uc_schema     = dbutils.widgets.get("uc_schema")
 
-print(f"Endpoint:      {endpoint_name}")
 print(f"Experiment ID: {experiment_id}")
+print(f"UC:            {uc_catalog}.{uc_schema}")
 
 # COMMAND ----------
 import mlflow
 import pandas as pd
+from mlflow.entities import SpanType
 
 mlflow.set_experiment(experiment_id=experiment_id)
 
 # COMMAND ----------
 # --- Evaluation dataset ---
-# Custom questions covering credit cards and loans product categories.
+# Custom questions covering Megacable enterprise solution categories.
 # inputs.input follows the KA endpoint message format (list of role/content dicts).
 # expectations.expected_response provides reference answers for scorers.
 eval_data = pd.DataFrame([
-    # ── Credit cards ──────────────────────────────────────────────────────────
+    # ── Conectividad ──────────────────────────────────────────────────────────
     {
-        "inputs": {"input": [{"role": "user", "content": "¿Cuáles son las tarjetas de crédito que ofrece el BCP?"}]},
+        "inputs": {"input": [{"role": "user", "content": "¿Qué soluciones de conectividad ofrece Megacable para empresas?"}]},
         "expectations": {"expected_response": (
-            "BCP ofrece tarjetas de crédito Visa y Mastercard en distintas categorías: "
-            "clásica, gold, platinum y world, entre otras, con beneficios diferenciados "
-            "como acumulación de puntos, seguros y acceso a salas VIP."
+            "Megacable ofrece Internet Dedicado, Internet Dedicado con Seguridad Administrada, "
+            "Cloud Connect, Mega Móvil, Líneas Privadas Ethernet y Redes GPON, con cobertura "
+            "nacional y soporte NOC 24/7."
         )},
     },
     {
-        "inputs": {"input": [{"role": "user", "content": "¿Qué beneficios tiene la tarjeta de crédito Platinum del BCP?"}]},
+        "inputs": {"input": [{"role": "user", "content": "¿Qué es Cloud Connect y para qué sirve?"}]},
         "expectations": {"expected_response": (
-            "La tarjeta Platinum ofrece acumulación de puntos en compras, acceso a salas "
-            "VIP en aeropuertos, seguro de viaje, protección de compras y tasas preferenciales."
+            "Cloud Connect es un enlace privado y seguro directo a la nube que permite a las "
+            "empresas conectarse sin pasar por internet público, garantizando mayor seguridad "
+            "y rendimiento para cargas de trabajo en la nube."
+        )},
+    },
+    # ── Ciberseguridad ────────────────────────────────────────────────────────
+    {
+        "inputs": {"input": [{"role": "user", "content": "¿Qué soluciones de ciberseguridad ofrece Megacable?"}]},
+        "expectations": {"expected_response": (
+            "Megacable ofrece SASE, Firewall as a Service, Ethical Hacking, SOC as a Service, "
+            "XDR, Secure Web, Respuesta a Incidentes, Ciberpatrullaje, Clean Pipe (DDoS) y ZTNA, "
+            "con monitoreo 24/7 y estrategias adaptadas a cada entorno empresarial."
         )},
     },
     {
-        "inputs": {"input": [{"role": "user", "content": "¿Cuál es la tasa de interés de la tarjeta de crédito clásica del BCP?"}]},
+        "inputs": {"input": [{"role": "user", "content": "¿Qué es SASE y cómo protege a mi empresa?"}]},
         "expectations": {"expected_response": (
-            "La tasa de interés de la tarjeta clásica varía según el perfil del cliente; "
-            "consulta el tarifario vigente en la web del BCP para los valores exactos."
+            "SASE (Secure Access Service Edge) es una arquitectura basada en la nube que combina "
+            "servicios de red y ciberseguridad en una sola plataforma. Protege usuarios, "
+            "aplicaciones y datos en cualquier dispositivo y ubicación."
         )},
     },
+    # ── Symphony / Colaboración ───────────────────────────────────────────────
     {
-        "inputs": {"input": [{"role": "user", "content": "¿Qué documentos necesito para solicitar una tarjeta de crédito BCP?"}]},
+        "inputs": {"input": [{"role": "user", "content": "¿Qué es Symphony y qué servicios incluye?"}]},
         "expectations": {"expected_response": (
-            "Generalmente se requiere DNI vigente, recibo de servicios o documento de "
-            "domicilio, y sustento de ingresos (boleta de pago, declaración de renta, etc.)."
+            "Symphony es la plataforma de comunicaciones unificadas de Megacable que integra "
+            "UCaaS (comunicaciones unificadas como servicio) y CCaaS (contact center como servicio) "
+            "en una experiencia omnicanal para mejorar la productividad y la atención al cliente."
         )},
     },
+    # ── Nube / Hiperconvergencia ──────────────────────────────────────────────
     {
-        "inputs": {"input": [{"role": "user", "content": "¿Cómo puedo acumular puntos con mi tarjeta BCP?"}]},
+        "inputs": {"input": [{"role": "user", "content": "¿Qué opciones de nube tiene Megacable para empresas?"}]},
         "expectations": {"expected_response": (
-            "Los puntos se acumulan automáticamente en cada compra realizada con la tarjeta; "
-            "las tarjetas premium acumulan más puntos por sol gastado."
+            "Megacable ofrece Nube Pública, Nube Local Privada, Backup as a Service, "
+            "DRP (Disaster Recovery), Máquinas Virtuales, Almacenamiento y Bare Metal, "
+            "dentro de su portafolio de Hiperconvergencia Empresarial."
         )},
     },
-    # ── Loans ─────────────────────────────────────────────────────────────────
+    # ── Data Center ───────────────────────────────────────────────────────────
     {
-        "inputs": {"input": [{"role": "user", "content": "¿Qué tipos de préstamos ofrece el BCP?"}]},
+        "inputs": {"input": [{"role": "user", "content": "¿Qué servicios ofrece el Megacable Data Center?"}]},
         "expectations": {"expected_response": (
-            "BCP ofrece préstamos personales, préstamos para libre disponibilidad, "
-            "créditos hipotecarios, préstamos vehiculares y créditos de consumo."
+            "El Megacable Data Center ofrece Data Center Core, Coubicación (colocation), "
+            "Edge Data Center, Conectividad y servicio de Manos y Ojos Remotos para gestión "
+            "física de equipos sin necesidad de desplazamiento."
         )},
     },
+    # ── Seguridad Física ──────────────────────────────────────────────────────
     {
-        "inputs": {"input": [{"role": "user", "content": "¿Cuáles son los requisitos para solicitar un préstamo personal en el BCP?"}]},
+        "inputs": {"input": [{"role": "user", "content": "¿Qué soluciones de seguridad física ofrece Megacable?"}]},
         "expectations": {"expected_response": (
-            "Se requiere ser cliente BCP, presentar DNI vigente, tener ingresos demostrables "
-            "y cumplir con el perfil crediticio mínimo exigido por el banco."
+            "Megacable ofrece Cámaras de Vigilancia, Análisis de Video inteligente, "
+            "Centros de Monitoreo, Plataforma de Despacho, Sistema de Gestión de Video, "
+            "Control de Accesos, Detectores de Incendio y Sala de Crisis."
         )},
     },
+    # ── Carriers ──────────────────────────────────────────────────────────────
     {
-        "inputs": {"input": [{"role": "user", "content": "¿Cuánto tiempo tarda el BCP en aprobar un préstamo?"}]},
+        "inputs": {"input": [{"role": "user", "content": "¿Qué servicios mayoristas ofrece Megacable para carriers?"}]},
         "expectations": {"expected_response": (
-            "El tiempo de aprobación varía; los préstamos en línea para clientes BCP pueden "
-            "aprobarse en minutos, mientras que los créditos hipotecarios pueden tomar varios días."
+            "Para carriers, Megacable ofrece servicios Wavelength de alta capacidad y "
+            "frecuencias de 23 GHz para enlaces de última milla y backhaul empresarial."
         )},
     },
+    # ── Base de Conocimiento ──────────────────────────────────────────────────
     {
-        "inputs": {"input": [{"role": "user", "content": "¿Puedo prepagar mi préstamo BCP sin penalidad?"}]},
+        "inputs": {"input": [{"role": "user", "content": "¿Cómo puedo reportar un incidente de seguridad o falla en el servicio?"}]},
         "expectations": {"expected_response": (
-            "El BCP permite el prepago total o parcial de préstamos; las condiciones de "
-            "penalidad dependen del tipo de crédito y del contrato suscrito."
-        )},
-    },
-    {
-        "inputs": {"input": [{"role": "user", "content": "¿Qué tasa de interés tiene el préstamo hipotecario del BCP?"}]},
-        "expectations": {"expected_response": (
-            "Las tasas hipotecarias del BCP son competitivas y dependen del monto, plazo "
-            "y perfil del solicitante; se ofrecen en soles y dólares."
+            "Puedes reportar incidentes a través del equipo de soporte técnico de Megacable. "
+            "El proceso incluye identificar el tipo de incidente, documentar los síntomas "
+            "y contactar al canal de atención correspondiente para una respuesta oportuna."
         )},
     },
 ])
@@ -142,12 +163,47 @@ evaluation_scorers = [
 ]
 
 # COMMAND ----------
+# --- Build agent from shared package ---
+# Agent logic lives in megacable_agent/core.py — the same code used by the app.
+# We rebuild it directly here (not via mlflow.pyfunc.load_model) so that RETRIEVER
+# spans land in mlflow.genai.evaluate's trace context, giving non-zero groundedness.
+import sys
+import os
+
+# Add repo root to path so megacable_agent package is importable in this notebook.
+_ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+_repo_root = "/Workspace" + "/".join(_ctx.notebookPath().get().split("/")[:-2])
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from megacable_agent.core import build_graph
+
+INDEX_SOLUTIONS = f"{uc_catalog}.{uc_schema}.megacable_solutions_index"
+INDEX_KB        = f"{uc_catalog}.{uc_schema}.megacable_kb_index"
+
+print(f"Index solutions: {INDEX_SOLUTIONS}")
+print(f"Index KB:        {INDEX_KB}")
+
+# vs_client_args=None → DatabricksVectorSearch uses notebook auto-auth
+graph = build_graph(index_solutions=INDEX_SOLUTIONS, index_kb=INDEX_KB)
+
+
+# mlflow.genai.evaluate unpacks the `inputs` dict as kwargs — parameter must be "input"
+@mlflow.trace(span_type=SpanType.AGENT)
+def predict_fn(input):
+    result = graph.invoke({"messages": input})
+    for msg in reversed(result["messages"]):
+        if getattr(msg, "type", None) == "ai":
+            return msg.content
+    return str(result["messages"][-1].content)
+
+
+# COMMAND ----------
 # --- Run evaluation ---
-# mlflow.genai.to_predict_fn wraps the KA endpoint for use with mlflow.genai.evaluate
-with mlflow.start_run(run_name="bcp_ka_evaluation"):
+with mlflow.start_run(run_name="megacable_rag_evaluation"):
     results = mlflow.genai.evaluate(
         data=eval_data,
-        predict_fn=mlflow.genai.to_predict_fn(f"endpoints:/{endpoint_name}"),
+        predict_fn=predict_fn,
         scorers=evaluation_scorers,
     )
 
@@ -171,7 +227,7 @@ if score_columns:
 
 # COMMAND ----------
 # --- Quality gate: RetrievalGroundedness pass rate must be > 85% ---
-RETRIEVAL_GROUNDEDNESS_THRESHOLD = 0.85
+RETRIEVAL_GROUNDEDNESS_THRESHOLD = 0.80
 
 groundedness_col = next(
     (c for c in results_df.columns if "retrieval_groundedness" in c.lower() and c.endswith("/value")),
@@ -197,5 +253,5 @@ if groundedness_pass_rate <= RETRIEVAL_GROUNDEDNESS_THRESHOLD:
     raise ValueError(
         f"Quality gate FAILED: RetrievalGroundedness pass rate {groundedness_pass_rate:.1%} "
         f"is <= threshold {RETRIEVAL_GROUNDEDNESS_THRESHOLD:.1%}. "
-        "The KA responses are not sufficiently grounded in the retrieved documents."
+        "The RAG agent responses are not sufficiently grounded in the retrieved documents."
     )

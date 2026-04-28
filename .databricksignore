@@ -1,0 +1,5 @@
+# Override .gitignore entries that should be included in bundle deploys.
+# Databricks CLI respects this file and the negations below force-include dist/.
+
+!client/dist
+!server/dist

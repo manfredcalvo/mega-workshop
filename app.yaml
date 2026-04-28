@@ -1,18 +1,13 @@
-command: ["npm", "run", "start"]
-runtime: nodejs20
+command: ["uv", "run", "start-app"]
 
 env:
-  - name: DATABRICKS_SERVING_ENDPOINT
-    valueFrom: serving-endpoint
-  - name: PGHOST
-    value: "ep-curly-wildflower-d1sc5iwr.database.us-west-2.cloud.databricks.com"
-  - name: PGDATABASE
-    value: "databricks_postgres"
-  - name: PGPORT
-    value: "5432"
-  - name: PGUSER
-    value: "6b555189-5a6a-4788-90d8-0fea08791144"
-  - name: PGSSLMODE
-    value: require
+  - name: API_PROXY
+    value: "http://localhost:8080/invocations"
+  - name: MLFLOW_TRACKING_URI
+    value: "databricks"
+  - name: MLFLOW_REGISTRY_URI
+    value: "databricks-uc"
   - name: MLFLOW_EXPERIMENT_ID
     valueFrom: experiment
+  - name: LAKEBASE_ENDPOINT
+    valueFrom: postgres

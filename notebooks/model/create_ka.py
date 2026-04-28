@@ -5,12 +5,14 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 """
-Creates a Knowledge Assistant (KA) for BCP products using the Databricks SDK.
-Configures two data sources: credit cards and loans.
+Creates a Knowledge Assistant (KA) for Megacable enterprise solutions
+using the Databricks SDK. Configures two data sources:
+  - Scraped enterprise solution pages (output_solutions)
+  - Translated telecom knowledge base (knowledge_base_md_es)
 
-If a KA named "BCP Productos" already exists it is reused — no new KA or
-knowledge sources are created. The knowledge sources are always synced at
-the end so the latest scraped files are indexed.
+If a KA named "Megacable Soluciones Empresariales" already exists it is
+reused — no new KA or knowledge sources are created. The knowledge sources
+are always synced at the end so the latest files are indexed.
 
 Expects Databricks notebook widget parameters:
   - uc_catalog: Unity Catalog catalog name
@@ -38,8 +40,8 @@ from databricks.sdk.service.knowledgeassistants import (
 w = WorkspaceClient()
 
 # COMMAND ----------
-# Check if a KA named "BCP Productos" already exists
-KA_DISPLAY_NAME = "BCP Productos"
+# Check if a KA named "Megacable Soluciones Empresariales" already exists
+KA_DISPLAY_NAME = "Megacable Soluciones Empresariales"
 
 existing_ka = None
 for assistant in w.knowledge_assistants.list_knowledge_assistants():
@@ -60,14 +62,16 @@ else:
         knowledge_assistant=KnowledgeAssistant(
             display_name=KA_DISPLAY_NAME,
             description=(
-                "Este agente se encarga de contestar preguntas relacionadas a las distintas "
-                "tarjetas de crédito y préstamos que ofrece BCP a sus clientes. Cada producto "
-                "contiene detalles acerca de los beneficios, tasas, tarifas, requisitos, "
-                "consideraciones y documentación."
+                "Este agente se encarga de contestar preguntas relacionadas a las soluciones "
+                "empresariales que ofrece Megacable: conectividad, ciberseguridad, colaboración, "
+                "nube, data center, seguridad física, infraestructura y carriers. También cuenta "
+                "con una base de conocimiento sobre soporte técnico y gestión de cuentas."
             ),
             instructions=(
                 "Siempre responde en español.\n"
-                "Asegúrate de utilizar las referencias a páginas que vienen en la documentación."
+                "Asegúrate de utilizar las referencias a páginas que vienen en la documentación.\n"
+                "Cuando el usuario pregunte por una solución, menciona los sub-productos y "
+                "beneficios relevantes disponibles en el portafolio de Megacable."
             ),
         )
     )
@@ -75,39 +79,42 @@ else:
     print(f"  Display name: {ka.display_name}")
     print(f"  Endpoint:     {ka.endpoint_name}")
 
-    # Add credit cards data source
-    credit_cards_source = w.knowledge_assistants.create_knowledge_source(
+    # Add enterprise solutions data source (scraped from mcmtechco.com)
+    solutions_source = w.knowledge_assistants.create_knowledge_source(
         parent=ka.name,
         knowledge_source=KnowledgeSource(
-            display_name="Tarjetas de Crédito",
+            display_name="Soluciones Empresariales",
             description=(
-                "Contiene archivos en formato markdown con información de cada una de las "
-                "tarjetas de crédito que ofrece el banco."
+                "Contiene archivos en formato markdown con información de las 8 categorías "
+                "de soluciones empresariales de Megacable: conectividad, ciberseguridad, "
+                "colaboración (Symphony), nube, data center, seguridad física, infraestructura "
+                "como servicio y carriers."
             ),
             source_type="files",
             files=FilesSpec(
-                path=f"/Volumes/{uc_catalog}/{uc_schema}/{uc_volume}/output_credit_cards"
+                path=f"/Volumes/{uc_catalog}/{uc_schema}/{uc_volume}/output_solutions"
             ),
         ),
     )
-    print(f"Credit cards source created: {credit_cards_source.name}")
+    print(f"Solutions source created: {solutions_source.name}")
 
-    # Add loans data source
-    loans_source = w.knowledge_assistants.create_knowledge_source(
+    # Add translated knowledge base data source
+    kb_source = w.knowledge_assistants.create_knowledge_source(
         parent=ka.name,
         knowledge_source=KnowledgeSource(
-            display_name="Préstamos",
+            display_name="Base de Conocimiento",
             description=(
-                "Estos documentos contienen información acerca de préstamos que el banco "
-                "provee a sus clientes."
+                "Base de conocimiento de soporte técnico traducida al español. Contiene "
+                "guías, políticas y procedimientos sobre gestión de cuentas, conectividad, "
+                "dispositivos y atención al cliente."
             ),
             source_type="files",
             files=FilesSpec(
-                path=f"/Volumes/{uc_catalog}/{uc_schema}/{uc_volume}/output_loans"
+                path=f"/Volumes/{uc_catalog}/{uc_schema}/{uc_volume}/knowledge_base_md_es"
             ),
         ),
     )
-    print(f"Loans source created: {loans_source.name}")
+    print(f"Knowledge base source created: {kb_source.name}")
 
 # COMMAND ----------
 # Sync knowledge sources and wait until indexing is complete
@@ -159,8 +166,8 @@ print(f"  ID:            {ka.name}")
 print(f"  Endpoint:      {ka.endpoint_name}")
 print(f"  Experiment ID: {ka.experiment_id}")
 print(f"  Sources:")
-print(f"    - Tarjetas de Crédito: /Volumes/{uc_catalog}/{uc_schema}/{uc_volume}/output_credit_cards")
-print(f"    - Préstamos:           /Volumes/{uc_catalog}/{uc_schema}/{uc_volume}/output_loans")
+print(f"    - Soluciones Empresariales: /Volumes/{uc_catalog}/{uc_schema}/{uc_volume}/output_solutions")
+print(f"    - Base de Conocimiento:     /Volumes/{uc_catalog}/{uc_schema}/{uc_volume}/knowledge_base_md_es")
 
 # Set task values so downstream job tasks can reference them via
 # {{tasks.create_ka.values.endpoint_name}} and {{tasks.create_ka.values.experiment_id}}

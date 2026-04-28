@@ -18,18 +18,14 @@ Scorers are idempotent — existing scorers are skipped and only missing ones
 are registered and started.
 
 Expects Databricks notebook widget parameters:
-  - endpoint_name:   KA serving endpoint name
   - experiment_id:   MLflow experiment ID to attach monitors to
 """
 
 # COMMAND ----------
-dbutils.widgets.text("endpoint_name", "", "KA Endpoint Name")
 dbutils.widgets.text("experiment_id", "", "MLflow Experiment ID")
 
-endpoint_name = dbutils.widgets.get("endpoint_name")
 experiment_id = dbutils.widgets.get("experiment_id")
 
-print(f"Endpoint:      {endpoint_name}")
 print(f"Experiment ID: {experiment_id}")
 
 # COMMAND ----------
@@ -92,7 +88,6 @@ print("\n" + "=" * 60)
 print("MLflow GenAI Production Monitoring Setup Complete")
 print("=" * 60)
 print(f"  Experiment ID:   {experiment_id}")
-print(f"  Endpoint:        {endpoint_name}")
 print(f"  Registered now:  {registered or '(none)'}")
 print(f"  Already active:  {skipped or '(none)'}")
 print("=" * 60)

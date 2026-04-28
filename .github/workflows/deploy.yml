@@ -1,4 +1,4 @@
-name: Deploy BCP Products
+name: Deploy Megacable Solutions
 
 on:
   push:
@@ -82,7 +82,7 @@ jobs:
         run: databricks bundle deploy -t ${{ env.TARGET }}
 
   scrape-and-create-ka:
-    name: Scrape Data & Create KA
+    name: Scrape Data, Translate KB & Create KA
     needs: deploy-bundle
     runs-on: ubuntu-latest
     outputs:
@@ -93,7 +93,26 @@ jobs:
 
       - uses: databricks/setup-cli@main
 
-      - name: Run scrapers and create KA
+      - name: Get UC volume coordinates from bundle summary
+        id: get_uc
+        run: |
+          SUMMARY=$(databricks bundle summary -t ${{ env.TARGET }} --output json)
+          UC_CATALOG=$(echo "$SUMMARY" | jq -r '.variables.uc_catalog.value')
+          UC_SCHEMA=$(echo "$SUMMARY"  | jq -r '.variables.uc_schema.value')
+          UC_VOLUME=$(echo "$SUMMARY"  | jq -r '.variables.uc_volume.value')
+          echo "uc_catalog=$UC_CATALOG" >> "$GITHUB_OUTPUT"
+          echo "uc_schema=$UC_SCHEMA"   >> "$GITHUB_OUTPUT"
+          echo "uc_volume=$UC_VOLUME"   >> "$GITHUB_OUTPUT"
+          echo "UC path: /Volumes/$UC_CATALOG/$UC_SCHEMA/$UC_VOLUME"
+
+      - name: Upload knowledge_base_md to UC volume
+        run: |
+          databricks fs cp -r ./knowledge_base_md/ \
+            "dbfs:/Volumes/${{ steps.get_uc.outputs.uc_catalog }}/${{ steps.get_uc.outputs.uc_schema }}/${{ steps.get_uc.outputs.uc_volume }}/knowledge_base_md/" \
+            --overwrite
+          echo "knowledge_base_md uploaded to volume."
+
+      - name: Run scrapers, translate KB and create KA
         id: run_job
         run: |
           databricks bundle run create_and_deploy_model -t ${{ env.TARGET }} --output json > job_output.json
@@ -124,52 +143,24 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python dependencies
-        run: pip install "databricks-sdk>=0.81.0" "psycopg[binary]>=3.0"
+        run: pip install "databricks-sdk>=0.81.0" "psycopg[binary]>=3.0" pyyaml
+
+      - name: Get Lakebase project ID and database ID
+        id: get_db
+        run: |
+          PROJECT_ID=$(databricks bundle summary -t ${{ env.TARGET }} --output json | jq -r '.resources.postgres_projects.chatbot_lakebase.project_id')
+          DB_ID=$(databricks postgres list-databases "projects/$PROJECT_ID/branches/production" --output json | jq -r '.[0].name')
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
+          echo "Project ID: $PROJECT_ID"
+          echo "Database ID: $DB_ID"
 
       - name: Get app service principal client ID
         id: get_sp
         run: |
-          SP_CLIENT_ID=$(databricks apps get bcp-products --output json | jq -r '.service_principal_client_id')
+          SP_CLIENT_ID=$(databricks apps get megacable-solutions --output json | jq -r '.service_principal_client_id')
           echo "sp_client_id=$SP_CLIENT_ID" >> "$GITHUB_OUTPUT"
           echo "Service Principal: $SP_CLIENT_ID"
-
-      - name: Get Lakebase project ID and endpoint hostname
-        id: get_db
-        run: |
-          PROJECT_ID=$(databricks bundle summary -t ${{ env.TARGET }} --output json | jq -r '.resources.postgres_projects.chatbot_lakebase.project_id')
-          PGHOST=$(databricks postgres get-endpoint "projects/$PROJECT_ID/branches/production/endpoints/primary" --output json | jq -r '.status.hosts.host')
-          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
-          echo "pghost=$PGHOST" >> "$GITHUB_OUTPUT"
-          echo "Project ID: $PROJECT_ID"
-          echo "PGHOST: $PGHOST"
-
-      - name: Update app.yaml with DB credentials
-        run: |
-          python3 - <<'EOF'
-          import re
-
-          pghost = "${{ steps.get_db.outputs.pghost }}"
-          pguser = "${{ steps.get_sp.outputs.sp_client_id }}"
-
-          with open("app.yaml") as f:
-              content = f.read()
-
-          content = re.sub(
-              r'(- name: PGHOST\s+value: ")[^"]*(")',
-              f'\\g<1>{pghost}\\g<2>',
-              content,
-          )
-          content = re.sub(
-              r'(- name: PGUSER\s+value: ")[^"]*(")',
-              f'\\g<1>{pguser}\\g<2>',
-              content,
-          )
-
-          with open("app.yaml", "w") as f:
-              f.write(content)
-
-          print(f"app.yaml updated — PGHOST={pghost}, PGUSER={pguser}")
-          EOF
 
       - name: Run Lakebase role setup
         run: |
@@ -177,19 +168,26 @@ jobs:
             --project-id ${{ steps.get_db.outputs.project_id }} \
             --sp-client-id ${{ steps.get_sp.outputs.sp_client_id }}
 
-      - name: Add app resources to databricks.yml
+      - name: Inject KA endpoint, experiment ID and Lakebase DB ID into databricks.yml
         run: |
-          pip install pyyaml -q
           python3 - <<'EOF'
           import yaml
 
           endpoint_name = "${{ needs.scrape-and-create-ka.outputs.endpoint_name }}"
           experiment_id = "${{ needs.scrape-and-create-ka.outputs.experiment_id }}"
+          db_id         = "${{ steps.get_db.outputs.db_id }}"
 
           with open("databricks.yml") as f:
               config = yaml.safe_load(f)
 
-          config["resources"]["apps"]["databricks_chatbot"]["resources"] = [
+          # Set the lakebase database ID variable
+          config["variables"]["lakebase_database_id"]["default"] = db_id
+
+          # Add serving-endpoint and experiment app resources
+          # (postgres resource is already declared statically in databricks.yml)
+          existing = config["resources"]["apps"]["databricks_chatbot"].get("resources", [])
+          non_ka = [r for r in existing if r["name"] not in ("serving-endpoint", "experiment")]
+          config["resources"]["apps"]["databricks_chatbot"]["resources"] = non_ka + [
               {
                   "name": "serving-endpoint",
                   "description": "Databricks serving endpoint name for the AI agent",
@@ -211,10 +209,10 @@ jobs:
           with open("databricks.yml", "w") as f:
               yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
 
-          print(f"Added app resources — endpoint: {endpoint_name}, experiment: {experiment_id}")
+          print(f"databricks.yml updated — db_id={db_id}, endpoint={endpoint_name}, experiment={experiment_id}")
           EOF
 
-      - name: Redeploy bundle with app resources and DB credentials
+      - name: Redeploy bundle with full config
         run: databricks bundle deploy -t ${{ env.TARGET }}
 
   start-app:

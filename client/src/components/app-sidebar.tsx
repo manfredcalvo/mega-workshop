@@ -39,9 +39,9 @@ export function AppSidebar({
               className="flex flex-row items-center gap-3"
             >
               <img
-                src="/bcp-logo.svg"
-                alt="BCP"
-                className="h-8 cursor-pointer px-1"
+                src="/mega-logo.png"
+                alt="MEGA"
+                className="h-10 w-auto cursor-pointer"
               />
             </Link>
             <Tooltip>

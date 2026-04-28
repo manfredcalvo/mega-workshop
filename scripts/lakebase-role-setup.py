@@ -61,19 +61,25 @@ def main():
         w.postgres.get_role(name=f"{branch}/roles/app-sp")
         print("  Role already exists, skipping")
     except Exception:
-        w.postgres.create_role(
-            parent=branch,
-            role_id="app-sp",
-            role=Role(
-                spec=RoleRoleSpec(
-                    postgres_role=sp,
-                    identity_type=RoleIdentityType.SERVICE_PRINCIPAL,
-                    auth_method=RoleAuthMethod.LAKEBASE_OAUTH_V1,
-                    membership_roles=[RoleMembershipRole.DATABRICKS_SUPERUSER]
+        try:
+            w.postgres.create_role(
+                parent=branch,
+                role_id="app-sp",
+                role=Role(
+                    spec=RoleRoleSpec(
+                        postgres_role=sp,
+                        identity_type=RoleIdentityType.SERVICE_PRINCIPAL,
+                        auth_method=RoleAuthMethod.LAKEBASE_OAUTH_V1,
+                        membership_roles=[RoleMembershipRole.DATABRICKS_SUPERUSER]
+                    )
                 )
             )
-        )
-        print("  Role created successfully")
+            print("  Role created successfully")
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                print("  Role already exists, skipping")
+            else:
+                raise
 
     # Step 2: Get endpoint host and connect
     print("\nStep 2: Getting Lakebase endpoint host...")

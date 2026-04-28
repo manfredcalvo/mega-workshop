@@ -22,7 +22,7 @@ export const Greeting = () => {
         transition={{ delay: 0.6 }}
         className="text-xl text-zinc-500 md:text-2xl"
       >
-        Al chat que te ayudará a entender más acerca de los productos que el banco tiene para ti.
+        Al asistente que te ayudará a conocer las soluciones empresariales de MEGA.
       </motion.div>
     </div>
   );

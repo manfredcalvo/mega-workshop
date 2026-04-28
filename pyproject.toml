@@ -1,0 +1,25 @@
+[project]
+name = "megacable-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "mlflow>=3.11.1",
+    "databricks-langchain>=0.19.0",
+    "databricks-vectorsearch>=0.67",
+    "langgraph>=1.1.8",
+    "databricks-sdk>=0.105.0",
+    "fastapi>=0.129.0",
+    "uvicorn>=0.41.0",
+    "python-dotenv>=1.2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_server", "megacable_agent", "scripts"]
+
+[project.scripts]
+start-app = "scripts.start_app:main"
+start-server = "agent_server.start_server:main"
