@@ -53,6 +53,10 @@ This project ships a `CLAUDE.md` that gives Claude Code full context about the a
 
 Instead of paying for an Anthropic Claude Code subscription, you can route all Claude Code API calls through your **Databricks workspace AI Gateway**. Claude Code bills against your Databricks workspace spend — no separate Anthropic account or license is needed.
 
+You have two options depending on whether you want the config to apply only to this project or to every Claude Code session on your machine.
+
+**Option A — Project-level settings (this project only)**
+
 Create `.claude/settings.json` at the project root:
 
 ```json
@@ -82,6 +86,33 @@ Create `.claude/settings.json` at the project root:
 | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | Set to `"1"` to disable Claude beta features not supported by the Databricks AI Gateway |
 
 > **Note:** `.claude/settings.json` is gitignored because it contains your PAT. Each developer creates their own copy locally.
+
+**Option B — Global settings (applies to all projects)**
+
+Configure once and every Claude Code session on your machine will use the Databricks AI Gateway automatically — no per-project file needed.
+
+On **Windows** the global settings file lives at:
+
+```
+%USERPROFILE%\.claude\settings.json
+```
+→ resolves to `C:\Users\<your-username>\.claude\settings.json`
+
+On **Mac / Linux**: `~/.claude/settings.json`
+
+Create the file in PowerShell:
+
+```powershell
+# Create the directory if it doesn't exist
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude"
+
+# Open in Notepad (or replace notepad with code, vim, etc.)
+notepad "$env:USERPROFILE\.claude\settings.json"
+```
+
+Paste the same JSON content shown in Option A and save. No `.gitignore` entry is needed — the file lives outside any repository.
+
+> **Precedence:** If both files exist, the project-level `.claude/settings.json` takes precedence over the global one. Use this to override the gateway URL or model for a specific project while keeping a shared global default.
 
 **How to get your AI Gateway URL:**
 1. Open your Databricks workspace
